@@ -70,8 +70,8 @@ class AppSettingsIn(BaseModel):
         ge=1,
         description="List custom field id in Redmine for label values s, m, l, xl, 2xl",
     )
-    # Merge into existing keys; never deletes keys (omit key to keep ciphertext)
-    ai_keys: list[dict[str, str]] | None = None
+    # Full list of AI key slots: omitted slots are removed. Empty key keeps stored ciphertext.
+    ai_keys: list[dict[str, Any]] | None = None
     project_id: int | None = None
     # LDAP: when ldap_enabled, DB config is used; empty password keeps stored hash.
     ldap_enabled: bool | None = None

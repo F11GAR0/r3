@@ -42,7 +42,7 @@ function newKeyRowId(): string {
 type ProviderInfo = { id: string; label: string };
 
 /**
- * Admin: Redmine (optional TLS verify off), list field id for complexity, AI keys (no delete), provider test.
+ * Admin: Redmine, list field for complexity, AI keys (full list on save, delete row), provider test.
  */
 export default function Settings() {
   const { user } = useAuth();
@@ -105,7 +105,7 @@ export default function Settings() {
             name: e.name,
             key: "",
           }))
-        : [{ id: "loaded-0", provider: "openai", name: "default", key: "" }]
+        : []
     );
     setLdapEnabled(!!j.ldap_enabled);
     setLdapUri(j.ldap_server_uri ?? "");
@@ -694,7 +694,7 @@ export default function Settings() {
           ))}
         </ul>
         <label className="block text-sm text-slate-600">
-          SOCKS5 для исходящих запросов к API ИИ (по одному на строку, round-robin). Пример:{" "}
+          SOCKS5 для исходящих запросов к API ИИ (по одному на строку). Пример:{" "}
           <code className="rounded bg-slate-100 px-1">socks5://127.0.0.1:1080</code> или{" "}
           <code className="rounded bg-slate-100 px-1">host:port</code>
         </label>
@@ -713,13 +713,18 @@ export default function Settings() {
 
       <div
         className="card max-w-2xl space-y-2"
-        title="Ключи нельзя удалить через интерфейс, только обновить секрет или добавить ещё"
+        title="Список ключей: полный набор на момент сохранения, можно удалить слот кнопкой"
       >
         <h2 className="font-medium">Сохранённые API-ключи</h2>
+        {keys.length === 0 && (
+          <p className="text-sm text-slate-500">Слотов нет. Добавьте хотя бы один или сохраните
+            пустой список, чтобы убрать все ключи ИИ.
+          </p>
+        )}
         {keys.map((k) => (
           <div
             key={k.id}
-            className="grid gap-1 rounded border border-slate-200 p-2 sm:grid-cols-3"
+            className="grid gap-1 rounded border border-slate-200 p-2 sm:grid-cols-[1fr_1fr_1fr_auto] sm:items-end"
           >
             <input
               placeholder="openai|gemini|deepseek|yandexgpt"
@@ -774,6 +779,13 @@ export default function Settings() {
               }}
               type="password"
             />
+            <button
+              type="button"
+              className="btn-ghost justify-self-end text-sm text-red-700"
+              onClick={() => setKeys((rows) => rows.filter((r) => r.id !== k.id))}
+            >
+              Удалить
+            </button>
           </div>
         ))}
         <button
@@ -789,11 +801,10 @@ export default function Settings() {
           + Добавить ключ
         </button>
         <p className="text-xs text-slate-500">
-          Удаление ключей из системы не поддерживается: можно только добавить слоты или сменить
-          секрет (укажите новый ключ в поле). Пустой ключ при сохранении оставляет прежний. Для
-          YandexGPT: обычно достаточно API-ключа; если API отвечает об ошибке модели, укажите в
-          поле ключа <code className="rounded bg-slate-100 px-0.5">FOLDER_ID|API_KEY</code> (id
-          каталога в Yandex Cloud и ключ через символ <code className="rounded bg-slate-100 px-0.5">|</code>).
+          Сохранение отправляет <strong>весь</strong> список: удалённые из формы слоты пропадут
+          из БД. Пустой секрет в поле ключа — оставить прежний ключ. Для YandexGPT при ошибке
+          модели: <code className="rounded bg-slate-100 px-0.5">FOLDER_ID|API_KEY</code> в поле
+          ключа.
         </p>
         <div>
           <button

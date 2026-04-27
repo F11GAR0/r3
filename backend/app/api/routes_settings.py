@@ -201,8 +201,9 @@ async def put_settings(
     """
     Update application settings. Admin or higher.
 
-    AI keys are merged: existing entries are never removed; send updates with the same
-    provider+name to replace the secret (non-empty key), or empty key to keep the old one.
+    AI keys: ``ai_keys`` is the **full** list of slots to keep. Rows not in the list are
+    removed. Non-empty ``key`` sets/replaces the secret; empty ``key`` keeps the previous
+    ciphertext for that provider+name.
     """
     s = await get_or_create_settings(session)
     d = body.model_dump(exclude_unset=True)
@@ -308,19 +309,14 @@ async def put_bootstrap_admin_password(
 
 def _merge_ai_keys(
     old_list: list[Any],
-    from_body: list[dict[str, str]],
+    from_body: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     """
-    Merge key rows: start from all existing, apply updates, never remove a row.
-
-    Args:
-        old_list: Current DB list.
-        from_body: New entries from the client; empty key string keeps the old ciphertext.
-
-    Returns:
-        New list to persist.
+    Build stored key list from the client's **full** slot list. Slots not present in
+    ``from_body`` are removed. Non-empty key replaces the secret; empty key keeps the old
+    ciphertext if that slot existed.
     """
-    by: dict[tuple[str, str], dict[str, Any]] = {}
+    old_by: dict[tuple[str, str], dict[str, Any]] = {}
     for o in old_list or []:
         if not isinstance(o, dict) or not o.get("name") or not o.get("provider"):
             continue
@@ -328,21 +324,31 @@ def _merge_ai_keys(
         n = str(o.get("name", ""))
         enc = o.get("encrypted")
         if p and n and enc:
-            by[(p, n)] = {"provider": p, "name": n, "encrypted": str(enc)}
+            old_by[(p, n)] = {"provider": p, "name": n, "encrypted": str(enc)}
+
+    out: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
     for item in from_body:
-        prov = str(item.get("provider", "")).lower()
-        name = str(item.get("name", ""))
-        key_plain = (item.get("key") or "").strip()
+        prov = str(item.get("provider", "")).lower().strip()
+        name = str(item.get("name", "")).strip()
         if not prov or not name:
             continue
+        pair = (prov, name)
+        if pair in seen:
+            continue
+        seen.add(pair)
+        key_plain = (item.get("key") or "").strip() if item.get("key") is not None else ""
         if key_plain:
-            by[(prov, name)] = {
-                "provider": prov,
-                "name": name,
-                "encrypted": encrypt_secret(key_plain),
-            }
-        # empty key: keep by[(prov,name)] if already in by; do nothing if new row without key
-    return list(by.values())
+            out.append(
+                {
+                    "provider": prov,
+                    "name": name,
+                    "encrypted": encrypt_secret(key_plain),
+                }
+            )
+        elif pair in old_by:
+            out.append(old_by[pair].copy())
+    return out
 
 
 async def _build_out(session: AsyncSession, s: AppSettings) -> AppSettingsOut:
