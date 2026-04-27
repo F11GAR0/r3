@@ -29,7 +29,7 @@ class AppSettings(TimestampMixin, Base):
     redmine_project_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # List custom field id in Redmine for t-shirt values s, m, l, xl, 2xl (displayed as label)
     redmine_complexity_field_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    # JSON list of { "provider": "openai|gemini|deepseek", "name": "key1", "encrypted": "..." }
+    # JSON list of { "provider": "openai|gemini|deepseek|yandexgpt", "name": "key1", "encrypted": "..." }
     ai_keys_json: Mapped[dict | None] = mapped_column(json_col(), nullable=True)
     # JSON list of SOCKS5 proxy URLs for outbound AI API calls (round-robin), e.g. ["socks5://127.0.0.1:1080"]
     ai_socks5_proxies_json: Mapped[list | None] = mapped_column(json_col(), nullable=True)

@@ -46,13 +46,19 @@ async def list_ai_provider_catalogue(
             "id": "deepseek",
             "label": "DeepSeek (чат + coder + reasoner по очереди при сбоях)",
         },
+        {
+            "id": "yandexgpt",
+            "label": "YandexGPT (Yandex Cloud API-ключ; при ошибке модели: FOLDER_ID|API_KEY)",
+        },
     ]
 
 
 class TestProviderBody(BaseModel):
     """Test connectivity for a provider using the first stored key for that id."""
 
-    provider: str = Field(min_length=2, max_length=32, description="openai|gemini|deepseek")
+    provider: str = Field(
+        min_length=2, max_length=32, description="openai|gemini|deepseek|yandexgpt"
+    )
 
 
 @router.post("/ai-providers/test", response_model=dict[str, str | bool])

@@ -33,7 +33,11 @@ type AdminUser = {
   is_active: boolean;
 };
 
-type KeyRow = { provider: string; name: string; key: string };
+type KeyRow = { id: string; provider: string; name: string; key: string };
+
+function newKeyRowId(): string {
+  return globalThis.crypto?.randomUUID?.() ?? `k-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
+}
 
 type ProviderInfo = { id: string; label: string };
 
@@ -95,8 +99,13 @@ export default function Settings() {
     setProj(j.project_id != null ? String(j.project_id) : "");
     setKeys(
       j.ai_key_entries.length > 0
-        ? j.ai_key_entries.map((e) => ({ provider: e.provider, name: e.name, key: "" }))
-        : [{ provider: "openai", name: "default", key: "" }]
+        ? j.ai_key_entries.map((e, i) => ({
+            id: `loaded-${i}`,
+            provider: e.provider,
+            name: e.name,
+            key: "",
+          }))
+        : [{ id: "loaded-0", provider: "openai", name: "default", key: "" }]
     );
     setLdapEnabled(!!j.ldap_enabled);
     setLdapUri(j.ldap_server_uri ?? "");
@@ -121,6 +130,7 @@ export default function Settings() {
           { id: "openai", label: "OpenAI" },
           { id: "gemini", label: "Google Gemini" },
           { id: "deepseek", label: "DeepSeek" },
+          { id: "yandexgpt", label: "YandexGPT" },
         ]);
       }
     })();
@@ -706,30 +716,44 @@ export default function Settings() {
         title="Ключи нельзя удалить через интерфейс, только обновить секрет или добавить ещё"
       >
         <h2 className="font-medium">Сохранённые API-ключи</h2>
-        {keys.map((k, i) => (
+        {keys.map((k) => (
           <div
-            key={`${k.provider}-${k.name}-${i}`}
+            key={k.id}
             className="grid gap-1 rounded border border-slate-200 p-2 sm:grid-cols-3"
           >
             <input
-              placeholder="openai|gemini|deepseek"
+              placeholder="openai|gemini|deepseek|yandexgpt"
               className="rounded border border-slate-200 px-2"
               value={k.provider}
               onChange={(e) => {
-                const n = [...keys];
-                n[i] = { ...k, provider: e.target.value };
-                setKeys(n);
+                const v = e.target.value;
+                setKeys((rows) => {
+                  const j = rows.findIndex((r) => r.id === k.id);
+                  if (j < 0) {
+                    return rows;
+                  }
+                  const n = [...rows];
+                  n[j] = { ...n[j], provider: v };
+                  return n;
+                });
               }}
-              title="Провайдер (из списка выше)"
+              title="Провайдер (из списка выше; Yandex: при необходимости FOLDER|ключ)"
             />
             <input
               placeholder="имя слота"
               className="rounded border border-slate-200 px-2"
               value={k.name}
               onChange={(e) => {
-                const n = [...keys];
-                n[i] = { ...k, name: e.target.value };
-                setKeys(n);
+                const v = e.target.value;
+                setKeys((rows) => {
+                  const j = rows.findIndex((r) => r.id === k.id);
+                  if (j < 0) {
+                    return rows;
+                  }
+                  const n = [...rows];
+                  n[j] = { ...n[j], name: v };
+                  return n;
+                });
               }}
             />
             <input
@@ -737,9 +761,16 @@ export default function Settings() {
               className="rounded border border-slate-200 px-2"
               value={k.key}
               onChange={(e) => {
-                const n = [...keys];
-                n[i] = { ...k, key: e.target.value };
-                setKeys(n);
+                const v = e.target.value;
+                setKeys((rows) => {
+                  const j = rows.findIndex((r) => r.id === k.id);
+                  if (j < 0) {
+                    return rows;
+                  }
+                  const n = [...rows];
+                  n[j] = { ...n[j], key: v };
+                  return n;
+                });
               }}
               type="password"
             />
@@ -751,7 +782,7 @@ export default function Settings() {
           onClick={() =>
             setKeys((ks) => [
               ...ks,
-              { provider: "openai", name: `slot${ks.length + 1}`, key: "" },
+              { id: newKeyRowId(), provider: "openai", name: `slot${ks.length + 1}`, key: "" },
             ])
           }
         >
@@ -759,7 +790,10 @@ export default function Settings() {
         </button>
         <p className="text-xs text-slate-500">
           Удаление ключей из системы не поддерживается: можно только добавить слоты или сменить
-          секрет (укажите новый ключ в поле). Пустой ключ при сохранении оставляет прежний.
+          секрет (укажите новый ключ в поле). Пустой ключ при сохранении оставляет прежний. Для
+          YandexGPT: обычно достаточно API-ключа; если API отвечает об ошибке модели, укажите в
+          поле ключа <code className="rounded bg-slate-100 px-0.5">FOLDER_ID|API_KEY</code> (id
+          каталога в Yandex Cloud и ключ через символ <code className="rounded bg-slate-100 px-0.5">|</code>).
         </p>
         <div>
           <button

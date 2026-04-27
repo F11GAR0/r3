@@ -1,5 +1,5 @@
 """
-Multi-provider LLM client with API key round-robin (Google AI / Gemma, OpenAI, DeepSeek).
+Multi-provider LLM client with API key round-robin (OpenAI, DeepSeek, Google AI / Gemma, YandexGPT).
 """
 
 import json
@@ -30,6 +30,7 @@ class AIProvider(StrEnum):
     OPENAI = "openai"
     GEMINI = "gemini"
     DEEPSEEK = "deepseek"
+    YANDEXGPT = "yandexgpt"
 
 
 # Generative Language API (AI Studio key): v1beta .../models/{id}:generateContent
@@ -50,6 +51,15 @@ GOOGLE_GENERATIVE_MODEL_CHAIN: tuple[str, ...] = (
 )
 OPENAI_MODEL_CHAIN: tuple[str, ...] = ("gpt-4o-mini", "gpt-4o", "gpt-3.5-turbo")
 DEEPSEEK_MODEL_CHAIN: tuple[str, ...] = ("deepseek-chat", "deepseek-coder", "deepseek-reasoner")
+
+# Yandex Cloud Foundation Models (OpenAI-compatible: POST /v1/chat/completions)
+# If short names 404/400, store creds as FOLDER_ID|API_KEY to use gpt://FOLDER/.../model
+YANDEX_GPT_BASE = "https://llm.api.cloud.yandex.net"
+YANDEXGPT_MODEL_CHAIN: tuple[str, ...] = (
+    "yandexgpt/latest",
+    "yandexgpt-lite/latest",
+    "yandexgpt-32b/latest",
+)
 
 # System prompts; users may override via profile (see effective_ai_prompts).
 DEFAULT_PROMPT_SPLIT_SYSTEM = (
@@ -218,6 +228,25 @@ def _pick_key(entries: list[APIKeyEntry], provider: AIProvider | None = None) ->
     return pool[idx]
 
 
+def _parse_yandex_secret(secret: str) -> tuple[str, tuple[str, ...]]:
+    """
+    Return (api_key, model_ids). If ``secret`` is ``FOLDER_ID|API_KEY``, build ``gpt://`` URIs.
+
+    Yandex Cloud often needs catalog id in the model name; short names like ``yandexgpt/latest``
+    work for some accounts.
+    """
+    raw = secret.strip()
+    if "|" in raw:
+        folder, key = raw.split("|", 1)
+        folder, key = folder.strip(), key.strip()
+        if folder and key:
+            return key, (
+                f"gpt://{folder}/yandexgpt/latest",
+                f"gpt://{folder}/yandexgpt-lite/latest",
+            )
+    return raw, YANDEXGPT_MODEL_CHAIN
+
+
 def _openai_complete_one(
     client: httpx.Client,
     base_url: str,
@@ -225,6 +254,8 @@ def _openai_complete_one(
     model: str,
     system: str,
     user: str,
+    *,
+    use_api_key_auth: bool = False,
 ) -> httpx.Response:
     body = {
         "model": model,
@@ -233,9 +264,10 @@ def _openai_complete_one(
             {"role": "user", "content": user},
         ],
     }
+    authz = f"Api-Key {api_key}" if use_api_key_auth else f"Bearer {api_key}"
     return client.post(
         f"{base_url.rstrip('/')}/v1/chat/completions",
-        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        headers={"Authorization": authz, "Content-Type": "application/json"},
         json=body,
         timeout=120.0,
     )
@@ -248,6 +280,8 @@ def _openai_complete(
     system: str,
     user: str,
     models: tuple[str, ...],
+    *,
+    use_api_key_auth: bool = False,
 ) -> str:
     """
     OpenAI-compatible /chat/completions: try each model in ``models`` on failure.
@@ -256,7 +290,15 @@ def _openai_complete(
     """
     last: httpx.Response | None = None
     for idx, m in enumerate(models):
-        r = _openai_complete_one(client, base_url, api_key, m, system, user)
+        r = _openai_complete_one(
+            client,
+            base_url,
+            api_key,
+            m,
+            system,
+            user,
+            use_api_key_auth=use_api_key_auth,
+        )
         if r.is_success:
             return str(r.json()["choices"][0]["message"]["content"])
         code = r.status_code
@@ -567,6 +609,19 @@ def test_provider_reachability(
                 )
                 r.raise_for_status()
                 return True, ""
+            if provider == AIProvider.YANDEXGPT:
+                yk, ymodels = _parse_yandex_secret(api_key)
+                r = _openai_complete_one(
+                    client,
+                    YANDEX_GPT_BASE,
+                    yk,
+                    ymodels[0],
+                    "You are a test.",
+                    ".",
+                    use_api_key_auth=True,
+                )
+                r.raise_for_status()
+                return True, ""
             if provider == AIProvider.GEMINI:
                 probe = _gemma_generate_content_body("You are a test.", ".", max_output_tokens=8)
                 for m in GOOGLE_GENERATIVE_MODEL_CHAIN[:3]:
@@ -633,6 +688,17 @@ def _call_provider(e: APIKeyEntry, system: str, user: str, client: httpx.Client)
             system,
             user,
             DEEPSEEK_MODEL_CHAIN,
+        )
+    if e.provider == AIProvider.YANDEXGPT:
+        yk, ymodels = _parse_yandex_secret(e.secret)
+        return _openai_complete(
+            client,
+            YANDEX_GPT_BASE,
+            yk,
+            system,
+            user,
+            ymodels,
+            use_api_key_auth=True,
         )
     if e.provider == AIProvider.GEMINI:
         return _gemini_complete(client, e.secret, GOOGLE_GEMMA_MODEL, system, user)
