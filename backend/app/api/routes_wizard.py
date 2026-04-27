@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi import status as http_status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_user, get_or_create_settings, make_redmine_client
+from app.api.deps import get_current_user, get_or_create_settings, make_redmine_client_for_user
 from app.db.session import get_db
 from app.models import TaskSplitEvent, User
 from app.schemas.issues import IssueOut, StatusOptionOut, WizardActionIn, WizardAIN
@@ -32,7 +32,7 @@ def _assert_wizard_assignee(issue: RedmineIssue, user: User) -> None:
 async def _load_issue_for_wizard(
     session: AsyncSession, user: User, issue_id: int
 ) -> RedmineIssue:
-    rmc = await make_redmine_client(session)
+    rmc = await make_redmine_client_for_user(session, user)
     try:
         issue = await rmc.get_issue(issue_id)
     finally:
@@ -50,7 +50,7 @@ async def wizard_queue(
     Return the same filtered stale list as the main backlog for Task Wizard.
     """
     c = await get_or_create_settings(session)
-    rmc = await make_redmine_client(session)
+    rmc = await make_redmine_client_for_user(session, user)
     if not user.redmine_user_id:
         await rmc.aclose()
         raise HTTPException(400, detail="Set redmine_user_id on your profile first")
@@ -87,7 +87,7 @@ async def wizard_status_options(
     or open global statuses on older servers.
     """
     await _load_issue_for_wizard(session, user, issue_id)
-    rmc = await make_redmine_client(session)
+    rmc = await make_redmine_client_for_user(session, user)
     try:
         raw = await rmc.list_allowed_statuses(issue_id)
     finally:
@@ -133,7 +133,7 @@ async def wizard_action(
     Execute a wizard action in Redmine and log a TaskSplitEvent.
     """
     await get_or_create_settings(session)
-    rmc = await make_redmine_client(session)
+    rmc = await make_redmine_client_for_user(session, user)
     try:
         issue = await rmc.get_issue(issue_id)
         _assert_wizard_assignee(issue, user)

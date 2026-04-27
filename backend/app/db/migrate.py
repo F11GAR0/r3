@@ -123,10 +123,31 @@ async def apply_user_patches(conn: AsyncConnection) -> None:
         await conn.execute(
             text("ALTER TABLE users ADD COLUMN IF NOT EXISTS ai_prompts_json JSONB NULL")
         )
+        await conn.execute(
+            text("ALTER TABLE users ADD COLUMN IF NOT EXISTS redmine_api_key_encrypted TEXT NULL")
+        )
+        await conn.execute(
+            text(
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS redmine_skip_tls "
+                "BOOLEAN NOT NULL DEFAULT false"
+            )
+        )
         return
     if d == "sqlite":
         r = (await conn.execute(text("PRAGMA table_info(users)"))).fetchall()
         cols = {str(row[1]) for row in r}
         if "ai_prompts_json" not in cols:
             await conn.execute(text("ALTER TABLE users ADD COLUMN ai_prompts_json JSON NULL"))
+        r2 = (await conn.execute(text("PRAGMA table_info(users)"))).fetchall()
+        cols2 = {str(row[1]) for row in r2}
+        if "redmine_api_key_encrypted" not in cols2:
+            await conn.execute(
+                text("ALTER TABLE users ADD COLUMN redmine_api_key_encrypted TEXT NULL")
+            )
+        r3 = (await conn.execute(text("PRAGMA table_info(users)"))).fetchall()
+        cols3 = {str(row[1]) for row in r3}
+        if "redmine_skip_tls" not in cols3:
+            await conn.execute(
+                text("ALTER TABLE users ADD COLUMN redmine_skip_tls BOOLEAN NOT NULL DEFAULT 0")
+            )
         return

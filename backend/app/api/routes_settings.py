@@ -8,11 +8,14 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from ldap3 import ALL, Connection, Server
 from ldap3.core.exceptions import LDAPException
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user, get_or_create_settings, require_min_role
+from app.core.config import get_settings
 from app.core.crypto_secrets import decrypt_secret, encrypt_secret
-from app.core.roles import Role
+from app.core.roles import Role, at_least
+from app.core.security import hash_password, verify_password
 from app.db.session import get_db
 from app.models import AppSettings, User
 from app.schemas.common import AIKeyEntryOut, AppSettingsIn, AppSettingsOut
@@ -228,6 +231,65 @@ async def put_settings(
     if "ldap_bind_password" in d and (d.get("ldap_bind_password") or "").strip():
         s.ldap_bind_password_encrypted = encrypt_secret(str(d["ldap_bind_password"]).strip())
     return await _build_out(session, s)
+
+
+class BootstrapAdminPasswordIn(BaseModel):
+    """Set a new password for the built-in admin user (from FIRST_ADMIN_USERNAME)."""
+
+    new_password: str = Field(min_length=8, max_length=256)
+    current_password: str | None = Field(
+        None,
+        description="Required when the bootstrap user changes their own password",
+    )
+
+
+@router.put("/bootstrap-admin-password", response_model=dict[str, bool])
+async def put_bootstrap_admin_password(
+    body: BootstrapAdminPasswordIn,
+    session: Annotated[AsyncSession, Depends(get_db)],
+    current: Annotated[User, Depends(require_min_role(Role.ADMIN))],
+) -> dict[str, bool]:
+    """
+    Change password for the seeded local admin account (default name: admin).
+
+    Superadmin may set a new password without the old one. The bootstrap user
+    changing their own password must send ``current_password``.
+    """
+    cfg = get_settings()
+    r = await session.execute(select(User).where(User.username == cfg.first_admin_username))
+    bootstrap = r.scalar_one_or_none()
+    if bootstrap is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Bootstrap user not found",
+        )
+    try:
+        cur_role = Role(current.role)
+    except ValueError:
+        cur_role = Role.USER
+    is_super = at_least(cur_role, Role.SUPERADMIN)
+    is_self = current.username == cfg.first_admin_username
+    if not is_super and not is_self:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the bootstrap admin or superadmin may change this password",
+        )
+    if is_self and not is_super:
+        if not bootstrap.hashed_password:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="This account has no local password",
+            )
+        if not body.current_password or not verify_password(
+            str(body.current_password), str(bootstrap.hashed_password)
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Current password is incorrect",
+            )
+    bootstrap.hashed_password = hash_password(body.new_password)
+    await session.flush()
+    return {"ok": True}
 
 
 def _merge_ai_keys(

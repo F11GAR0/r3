@@ -7,7 +7,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_user, get_or_create_settings, make_redmine_client
+from app.api.deps import get_current_user, get_or_create_settings, make_redmine_client_for_user
 from app.db.session import get_db
 from app.models import TaskSplitEvent, User
 from app.schemas.issues import (
@@ -115,7 +115,7 @@ async def get_issue_context(
             detail="redmine_user_id is not set for this user",
         )
     c = await get_or_create_settings(session)
-    rmc = await make_redmine_client(session)
+    rmc = await make_redmine_client_for_user(session, user)
     try:
         issue = await rmc.get_issue(issue_id)
     finally:
@@ -158,7 +158,7 @@ async def list_my_issues(
     by updated date, stagnation, or criticality.
     """
     c = await get_or_create_settings(session)
-    rmc = await make_redmine_client(session)
+    rmc = await make_redmine_client_for_user(session, user)
     if not user.redmine_user_id:
         await rmc.aclose()
         raise HTTPException(
@@ -192,7 +192,7 @@ async def suggest_split(
     Propose 2-4 subtasks with AI (or return empty and allow manual in UI if no keys).
     """
     keys = await _get_keys(session)
-    rmc = await make_redmine_client(session)
+    rmc = await make_redmine_client_for_user(session, user)
     try:
         issue = await rmc.get_issue(issue_id)
     finally:
@@ -237,7 +237,7 @@ async def create_subtask(
     Create a child issue under the given parent (split without AI is allowed).
     """
     await get_or_create_settings(session)
-    rmc = await make_redmine_client(session)
+    rmc = await make_redmine_client_for_user(session, user)
     try:
         parent = await rmc.get_issue(issue_id)
         cf_payload: list[dict[str, Any]] = [
@@ -284,7 +284,7 @@ async def suggest_complexity(
     keys = await _get_keys(session)
     if not keys:
         raise HTTPException(status_code=400, detail="No AI keys configured")
-    rmc = await make_redmine_client(session)
+    rmc = await make_redmine_client_for_user(session, user)
     try:
         issue = await rmc.get_issue(issue_id)
     finally:
@@ -316,7 +316,7 @@ async def set_complexity(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Set redmine_complexity_field_id in settings (Redmine list field for s–2xl)",
         )
-    rmc = await make_redmine_client(session)
+    rmc = await make_redmine_client_for_user(session, user)
     try:
         await rmc.set_complexity_label(issue_id, value, custom_field_id=fid)
     finally:

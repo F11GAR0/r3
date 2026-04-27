@@ -72,8 +72,13 @@ export default function Wizard() {
   const [q, setQ] = useState<Queue>([]);
   const [ix, setIx] = useState(0);
   const [rid, setRid] = useState(String(user?.redmine_user_id ?? ""));
+  const [rmKey, setRmKey] = useState("");
   const [hint, setHint] = useState<Hint | null>(null);
   const [err, setErr] = useState("");
+  const [linkSaving, setLinkSaving] = useState(false);
+  const [skipTls, setSkipTls] = useState(false);
+  const [skipApiVerify, setSkipApiVerify] = useState(false);
+  const [tlsSaving, setTlsSaving] = useState(false);
   const [aiLoading, setAiLoading] = useState(false);
   const [card, setCard] = useState<Issue | null>(null);
   const [cardLoading, setCardLoading] = useState(false);
@@ -100,6 +105,10 @@ export default function Wizard() {
       void load();
     }
   }, [load, user?.redmine_user_id]);
+
+  useEffect(() => {
+    setSkipTls(!!user?.redmine_skip_tls);
+  }, [user?.redmine_skip_tls]);
 
   const cur = q[ix] ?? null;
   const curId = cur?.id;
@@ -159,23 +168,83 @@ export default function Wizard() {
       <div className="space-y-4">
         <h1 className="text-xl font-bold">Task Wizard</h1>
         <p className="text-slate-600">Сначала привяжите Redmine user id (как в Workbench).</p>
+        <p className="text-xs text-slate-500 max-w-md">
+          При необходимости укажите персональный API-ключ из Redmine (Моя учётная запись → API access),
+          если сервисный ключ в настройках R3 не видит пользователей.
+        </p>
+        {err && <p className="text-sm text-red-600 max-w-md">{err}</p>}
         <div className="card flex max-w-md flex-col gap-2">
+          <label className="text-sm text-slate-600">Redmine user id</label>
           <input
             className="rounded border border-slate-300 px-3 py-2"
             value={rid}
             onChange={(e) => setRid(e.target.value)}
           />
+          <label className="text-sm text-slate-600">Персональный API-ключ (необязательно)</label>
+          <input
+            className="rounded border border-slate-300 px-3 py-2 font-mono text-sm"
+            type="password"
+            autoComplete="off"
+            value={rmKey}
+            onChange={(e) => setRmKey(e.target.value)}
+          />
+          <label className="flex items-center gap-2 text-sm text-slate-700">
+            <input
+              type="checkbox"
+              checked={skipTls}
+              onChange={(e) => setSkipTls(e.target.checked)}
+            />
+            Не проверять TLS (самоподписанный Redmine)
+          </label>
+          <label className="flex items-start gap-2 text-sm text-slate-700">
+            <input
+              type="checkbox"
+              className="mt-0.5"
+              checked={skipApiVerify}
+              onChange={(e) => setSkipApiVerify(e.target.checked)}
+            />
+            <span>
+              Сохранить без проверки API, если с сервера R3 к Redmine везде 403, а ключ в браузере
+              рабочий.
+            </span>
+          </label>
           <button
             type="button"
-            className="btn-primary w-fit"
+            className="btn-primary inline-flex w-fit items-center gap-1"
+            disabled={linkSaving}
             onClick={async () => {
-              await jsonFetch("/api/profile", {
-                method: "PATCH",
-                body: JSON.stringify({ redmine_user_id: parseInt(rid, 10) }),
-              });
-              void refresh();
+              setErr("");
+              setLinkSaving(true);
+              try {
+                const n = parseInt(rid, 10);
+                if (!Number.isFinite(n) || n < 1) {
+                  setErr("Укажите корректный числовой id (≥ 1).");
+                  return;
+                }
+                const body: Record<string, string | number | boolean> = {
+                  redmine_user_id: n,
+                  redmine_skip_tls: skipTls,
+                };
+                if (rmKey.trim()) {
+                  body.redmine_api_key = rmKey.trim();
+                }
+                if (skipApiVerify) {
+                  body.skip_redmine_verify = true;
+                }
+                await jsonFetch("/api/profile", {
+                  method: "PATCH",
+                  body: JSON.stringify(body),
+                });
+                setRmKey("");
+                void refresh();
+              } catch (e) {
+                setErr(e instanceof Error ? e.message : "Ошибка");
+              } finally {
+                setLinkSaving(false);
+              }
             }}
           >
+            {linkSaving && <Loader2 className="h-4 w-4 shrink-0 animate-spin" />}
             Сохранить
           </button>
         </div>
@@ -192,6 +261,38 @@ export default function Wizard() {
         >
           Task Wizard
         </h1>
+        <div className="flex flex-wrap items-center justify-center gap-2 text-sm">
+          <label className="flex cursor-pointer items-center gap-2 text-slate-600">
+            <input
+              type="checkbox"
+              checked={skipTls}
+              onChange={(e) => setSkipTls(e.target.checked)}
+            />
+            Не проверять TLS к Redmine
+          </label>
+          <button
+            type="button"
+            className="btn-ghost text-xs"
+            disabled={tlsSaving}
+            onClick={async () => {
+              setErr("");
+              setTlsSaving(true);
+              try {
+                await jsonFetch("/api/profile", {
+                  method: "PATCH",
+                  body: JSON.stringify({ redmine_skip_tls: skipTls }),
+                });
+                void refresh();
+              } catch (e) {
+                setErr(e instanceof Error ? e.message : "Ошибка");
+              } finally {
+                setTlsSaving(false);
+              }
+            }}
+          >
+            {tlsSaving ? "…" : "Сохранить TLS"}
+          </button>
+        </div>
         {err && <p className="text-center text-sm text-red-600">{err}</p>}
 
         <div

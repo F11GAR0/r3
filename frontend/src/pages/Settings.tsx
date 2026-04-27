@@ -1,3 +1,4 @@
+import { Loader2 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { jsonFetch } from "../api";
 import { isAdmin, isSuperAdmin, useAuth } from "../auth";
@@ -63,6 +64,21 @@ export default function Settings() {
   const [roleRows, setRoleRows] = useState<RoleRow[]>([]);
   const [adminUsers, setAdminUsers] = useState<AdminUser[]>([]);
   const [userMsg, setUserMsg] = useState("");
+  const [ldapSaveMsg, setLdapSaveMsg] = useState("");
+  const [ldapSaveErr, setLdapSaveErr] = useState("");
+  const [ldapSaving, setLdapSaving] = useState(false);
+  const [ldapProvisionLogin, setLdapProvisionLogin] = useState("");
+  const [provisionFromLdapLoading, setProvisionFromLdapLoading] = useState(false);
+  const [provisionFromLdapMsg, setProvisionFromLdapMsg] = useState("");
+  const [provisionFromLdapErr, setProvisionFromLdapErr] = useState("");
+  const [bootstrapNew, setBootstrapNew] = useState("");
+  const [bootstrapCurrent, setBootstrapCurrent] = useState("");
+  const [bootstrapMsg, setBootstrapMsg] = useState("");
+  const [bootstrapErr, setBootstrapErr] = useState("");
+  const [bootstrapSaving, setBootstrapSaving] = useState(false);
+
+  const canBootstrapPassword =
+    isAdmin(user) && (isSuperAdmin(user) || user?.username === "admin");
 
   const load = useCallback(async () => {
     const j = await jsonFetch<Sett>("/api/settings");
@@ -225,6 +241,8 @@ export default function Settings() {
             {s.ldap_effective ? " · в данный момент вход по LDAP активен" : ""}
           </p>
         )}
+        {ldapSaveMsg && <p className="text-sm text-green-700">{ldapSaveMsg}</p>}
+        {ldapSaveErr && <p className="text-sm text-red-600">{ldapSaveErr}</p>}
         <label className="flex items-center gap-2 text-sm">
           <input
             type="checkbox"
@@ -281,6 +299,44 @@ export default function Settings() {
           Для Active Directory часто:{" "}
           <code className="rounded bg-slate-100 px-1">(sAMAccountName={"{"}username{"}"})</code>
         </p>
+        <div>
+          <button
+            type="button"
+            className="btn-primary inline-flex items-center gap-2"
+            disabled={ldapSaving}
+            onClick={async () => {
+              setLdapSaveMsg("");
+              setLdapSaveErr("");
+              setLdapSaving(true);
+              try {
+                const body: Record<string, unknown> = {
+                  ldap_enabled: ldapEnabled,
+                  ldap_server_uri: ldapUri.trim() || null,
+                  ldap_bind_dn: ldapBindDn.trim() || null,
+                  ldap_user_base_dn: ldapUserBase.trim() || null,
+                  ldap_user_filter: ldapFilter.trim() || null,
+                };
+                if (ldapBindPassword.trim()) {
+                  body.ldap_bind_password = ldapBindPassword.trim();
+                }
+                await jsonFetch<Sett>("/api/settings", {
+                  method: "PUT",
+                  body: JSON.stringify(body),
+                });
+                setLdapSaveMsg("Настройки LDAP сохранены.");
+                setLdapBindPassword("");
+                await load();
+              } catch (e) {
+                setLdapSaveErr(e instanceof Error ? e.message : "Ошибка");
+              } finally {
+                setLdapSaving(false);
+              }
+            }}
+          >
+            {ldapSaving && <Loader2 className="h-4 w-4 shrink-0 animate-spin" />}
+            Сохранить настройки LDAP
+          </button>
+        </div>
         <div className="rounded border border-slate-200 p-2 space-y-2">
           <p className="text-xs font-medium text-slate-600">Проверка (без сохранения в БД)</p>
           <div className="grid gap-2 sm:grid-cols-2">
@@ -347,6 +403,55 @@ export default function Settings() {
             ))}
           </ul>
           {userMsg && <p className="text-sm text-green-700">{userMsg}</p>}
+          {provisionFromLdapMsg && <p className="text-sm text-green-700">{provisionFromLdapMsg}</p>}
+          {provisionFromLdapErr && <p className="text-sm text-red-600">{provisionFromLdapErr}</p>}
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+            <div className="min-w-0 flex-1">
+              <label className="text-xs text-slate-600" htmlFor="ldap-provision-login">
+                Логин в LDAP (добавить в список без первого входа)
+              </label>
+              <input
+                id="ldap-provision-login"
+                className="mt-1 w-full rounded border border-slate-300 px-3 py-2 font-mono text-sm"
+                value={ldapProvisionLogin}
+                onChange={(e) => setLdapProvisionLogin(e.target.value)}
+                placeholder="uid или sAMAccountName"
+                autoComplete="off"
+              />
+            </div>
+            <button
+              type="button"
+              className="btn-ghost inline-flex shrink-0 items-center gap-2"
+              disabled={provisionFromLdapLoading}
+              onClick={async () => {
+                setProvisionFromLdapMsg("");
+                setProvisionFromLdapErr("");
+                const u = ldapProvisionLogin.trim();
+                if (!u) {
+                  setProvisionFromLdapErr("Укажите логин.");
+                  return;
+                }
+                setProvisionFromLdapLoading(true);
+                try {
+                  await jsonFetch<AdminUser>("/api/admin/users/from-ldap", {
+                    method: "POST",
+                    body: JSON.stringify({ username: u }),
+                  });
+                  setProvisionFromLdapMsg("Пользователь добавлен из LDAP; назначьте роль в таблице.");
+                  setLdapProvisionLogin("");
+                  const uu = await jsonFetch<AdminUser[]>("/api/admin/users");
+                  setAdminUsers(uu);
+                } catch (e) {
+                  setProvisionFromLdapErr(e instanceof Error ? e.message : "Ошибка");
+                } finally {
+                  setProvisionFromLdapLoading(false);
+                }
+              }}
+            >
+              {provisionFromLdapLoading && <Loader2 className="h-4 w-4 shrink-0 animate-spin" />}
+              Добавить из LDAP
+            </button>
+          </div>
           <div className="overflow-x-auto">
             <table className="w-full min-w-[28rem] text-left text-sm">
               <thead>
@@ -404,6 +509,79 @@ export default function Settings() {
               </tbody>
             </table>
           </div>
+        </div>
+      )}
+
+      {canBootstrapPassword && (
+        <div className="card max-w-2xl space-y-3">
+          <h2 className="font-medium">Пароль встроенной учётки admin</h2>
+          <p className="text-xs text-slate-500">
+            Учётная запись с именем <code className="rounded bg-slate-100 px-1">admin</code> из
+            первого запуска. Супер-админ может задать новый пароль без старого; сам пользователь
+            <code className="rounded bg-slate-100 px-1"> admin</code> — укажите текущий пароль.
+          </p>
+          {bootstrapMsg && <p className="text-sm text-green-700">{bootstrapMsg}</p>}
+          {bootstrapErr && <p className="text-sm text-red-600">{bootstrapErr}</p>}
+          {!isSuperAdmin(user) && (
+            <div>
+              <label className="text-sm text-slate-600">Текущий пароль</label>
+              <input
+                type="password"
+                className="mt-1 w-full rounded border border-slate-300 px-3 py-2"
+                value={bootstrapCurrent}
+                onChange={(e) => setBootstrapCurrent(e.target.value)}
+                autoComplete="current-password"
+              />
+            </div>
+          )}
+          <div>
+            <label className="text-sm text-slate-600">Новый пароль (от 8 символов)</label>
+            <input
+              type="password"
+              className="mt-1 w-full rounded border border-slate-300 px-3 py-2"
+              value={bootstrapNew}
+              onChange={(e) => setBootstrapNew(e.target.value)}
+              autoComplete="new-password"
+            />
+          </div>
+          <button
+            type="button"
+            className="btn-primary inline-flex items-center gap-2"
+            disabled={bootstrapSaving}
+            onClick={async () => {
+              setBootstrapMsg("");
+              setBootstrapErr("");
+              if (bootstrapNew.trim().length < 8) {
+                setBootstrapErr("Минимум 8 символов.");
+                return;
+              }
+              if (!isSuperAdmin(user) && !bootstrapCurrent.trim()) {
+                setBootstrapErr("Укажите текущий пароль.");
+                return;
+              }
+              setBootstrapSaving(true);
+              try {
+                const body: Record<string, string> = { new_password: bootstrapNew.trim() };
+                if (!isSuperAdmin(user)) {
+                  body.current_password = bootstrapCurrent;
+                }
+                await jsonFetch<{ ok: boolean }>("/api/settings/bootstrap-admin-password", {
+                  method: "PUT",
+                  body: JSON.stringify(body),
+                });
+                setBootstrapMsg("Пароль обновлён.");
+                setBootstrapNew("");
+                setBootstrapCurrent("");
+              } catch (e) {
+                setBootstrapErr(e instanceof Error ? e.message : "Ошибка");
+              } finally {
+                setBootstrapSaving(false);
+              }
+            }}
+          >
+            {bootstrapSaving && <Loader2 className="h-4 w-4 shrink-0 animate-spin" />}
+            Сохранить пароль
+          </button>
         </div>
       )}
 
@@ -527,11 +705,6 @@ export default function Settings() {
                 sprint_lifecycle_days: sprint,
                 project_id: proj ? parseInt(proj, 10) : null,
                 ai_keys: keys.map((k) => ({ provider: k.provider, name: k.name, key: k.key })),
-                ldap_enabled: ldapEnabled,
-                ldap_server_uri: ldapUri.trim() || null,
-                ldap_bind_dn: ldapBindDn.trim() || null,
-                ldap_user_base_dn: ldapUserBase.trim() || null,
-                ldap_user_filter: ldapFilter.trim() || null,
               };
               if (apiKey.trim()) {
                 body.redmine_api_key = apiKey.trim();
@@ -540,9 +713,6 @@ export default function Settings() {
                 body.redmine_complexity_field_id = parseInt(cfid, 10);
               } else {
                 body.redmine_complexity_field_id = null;
-              }
-              if (ldapBindPassword.trim()) {
-                body.ldap_bind_password = ldapBindPassword.trim();
               }
               await jsonFetch<Sett>("/api/settings", { method: "PUT", body: JSON.stringify(body) });
               setMsg("Сохранено.");

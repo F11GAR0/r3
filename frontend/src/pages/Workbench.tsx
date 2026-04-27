@@ -86,6 +86,9 @@ export default function Workbench() {
   const [contextRefreshing, setContextRefreshing] = useState(false);
   const [subtaskSubmitting, setSubtaskSubmitting] = useState<number | null>(null);
   const [profileSaving, setProfileSaving] = useState(false);
+  const [rmKey, setRmKey] = useState("");
+  const [skipTls, setSkipTls] = useState(false);
+  const [skipApiVerify, setSkipApiVerify] = useState(false);
   const [openById, setOpenById] = useState("");
   const [openByIdLoading, setOpenByIdLoading] = useState(false);
   const [splitLastMs, setSplitLastMs] = useState<number | null>(null);
@@ -209,6 +212,10 @@ export default function Workbench() {
   }, [sug]);
 
   useEffect(() => {
+    setSkipTls(!!user?.redmine_skip_tls);
+  }, [user?.redmine_skip_tls]);
+
+  useEffect(() => {
     const root = splitScrollRef.current;
     const target = sugLoadMoreRef.current;
     if (!root || !target) {
@@ -234,6 +241,12 @@ export default function Workbench() {
       <div className="space-y-4">
         <h1 className="text-xl font-bold">Workbench</h1>
         <p className="text-slate-600">Укажите ваш Redmine user id, чтобы увидеть задачи.</p>
+        <p className="text-xs text-slate-500 max-w-md">
+          Если глобальный API-ключ в настройках не от администратора Redmine, укажите <strong>персональный</strong>{" "}
+          ключ (Redmine → Моя учётная запись → API access key) — тогда R3 обращается к Redmine от вашего
+          имени, как при входе по LDAP/паролю в Redmine.
+        </p>
+        {err && <p className="text-sm text-red-600 max-w-md">{err}</p>}
         <div className="card flex max-w-md flex-col gap-2">
           <label className="text-sm text-slate-600">Redmine user id (число)</label>
           <input
@@ -242,18 +255,66 @@ export default function Workbench() {
             onChange={(e) => setRid(e.target.value)}
             title="ID пользователя в Redmine (см. /users/ в Redmine)"
           />
+          <label className="text-sm text-slate-600">Персональный API-ключ Redmine (необязательно)</label>
+          <input
+            className="rounded border border-slate-300 px-3 py-2 font-mono text-sm"
+            type="password"
+            autoComplete="off"
+            value={rmKey}
+            onChange={(e) => setRmKey(e.target.value)}
+            placeholder="скопируйте из My account → API access"
+          />
+          <label className="flex items-center gap-2 text-sm text-slate-700">
+            <input
+              type="checkbox"
+              checked={skipTls}
+              onChange={(e) => setSkipTls(e.target.checked)}
+            />
+            Не проверять TLS (самоподписанный Redmine)
+          </label>
+          <label className="flex items-start gap-2 text-sm text-slate-700">
+            <input
+              type="checkbox"
+              className="mt-0.5"
+              checked={skipApiVerify}
+              onChange={(e) => setSkipApiVerify(e.target.checked)}
+            />
+            <span>
+              Сохранить без проверки API — если с сервера R3 к Redmine везде <strong>403</strong> (ip,
+              WAF, прокси), а в браузере тот же ключ работает. Id и ключ должны быть верными.
+            </span>
+          </label>
           <button
             type="button"
             className="btn-primary inline-flex w-fit items-center gap-1"
             disabled={profileSaving}
             onClick={async () => {
+              setErr("");
               setProfileSaving(true);
               try {
+                const n = parseInt(rid, 10);
+                if (!Number.isFinite(n) || n < 1) {
+                  setErr("Укажите корректный числовой id (≥ 1).");
+                  return;
+                }
+                const body: Record<string, string | number | boolean> = {
+                  redmine_user_id: n,
+                  redmine_skip_tls: skipTls,
+                };
+                if (rmKey.trim()) {
+                  body.redmine_api_key = rmKey.trim();
+                }
+                if (skipApiVerify) {
+                  body.skip_redmine_verify = true;
+                }
                 await jsonFetch("/api/profile", {
                   method: "PATCH",
-                  body: JSON.stringify({ redmine_user_id: parseInt(rid, 10) }),
+                  body: JSON.stringify(body),
                 });
+                setRmKey("");
                 await refresh();
+              } catch (e) {
+                setErr(e instanceof Error ? e.message : "Ошибка");
               } finally {
                 setProfileSaving(false);
               }
@@ -278,6 +339,38 @@ export default function Workbench() {
         (дольше, чем Sprint Livecycle, от последнего обновления). Кружок — наглядная шкала
         от порога спринта до 600 дней, оттенок смещается каждые 14 дней.
       </p>
+      <div className="flex flex-wrap items-center gap-3 rounded-lg border border-slate-200 bg-slate-50/80 px-3 py-2 text-sm">
+        <label className="flex cursor-pointer items-center gap-2 text-slate-700">
+          <input
+            type="checkbox"
+            checked={skipTls}
+            onChange={(e) => setSkipTls(e.target.checked)}
+          />
+          Не проверять TLS к Redmine
+        </label>
+        <button
+          type="button"
+          className="btn-ghost text-sm"
+          disabled={profileSaving}
+          onClick={async () => {
+            setErr("");
+            setProfileSaving(true);
+            try {
+              await jsonFetch("/api/profile", {
+                method: "PATCH",
+                body: JSON.stringify({ redmine_skip_tls: skipTls }),
+              });
+              await refresh();
+            } catch (e) {
+              setErr(e instanceof Error ? e.message : "Ошибка");
+            } finally {
+              setProfileSaving(false);
+            }
+          }}
+        >
+          {profileSaving ? "…" : "Сохранить"}
+        </button>
+      </div>
       {err && <p className="text-sm text-red-600">{err}</p>}
       <div className="flex flex-wrap items-end gap-2 rounded-lg border border-slate-200/80 bg-slate-50/50 px-3 py-2">
         <div className="flex min-w-[12rem] flex-1 flex-col gap-0.5">

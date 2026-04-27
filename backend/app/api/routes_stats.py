@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_user, get_or_create_settings, make_redmine_client
+from app.api.deps import get_current_user, get_or_create_settings, make_redmine_client_for_user
 from app.core.roles import Role
 from app.db.session import get_db
 from app.models import TaskSplitEvent, User
@@ -58,7 +58,7 @@ async def stats_summary(
     )
     r_count = (await session.execute(ev)).scalar_one()
     c = await get_or_create_settings(session)
-    rmc = await make_redmine_client(session)
+    rmc = await make_redmine_client_for_user(session, u)
     hours = 0.0
     if u.redmine_user_id:
         try:

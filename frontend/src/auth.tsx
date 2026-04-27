@@ -13,6 +13,8 @@ type User = {
   username: string;
   role: string;
   redmine_user_id: number | null;
+  has_redmine_api_key?: boolean;
+  redmine_skip_tls?: boolean;
   /** Effective merged AI system prompts */
   ai_prompts?: Record<string, string>;
 };

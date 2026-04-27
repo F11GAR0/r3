@@ -182,6 +182,8 @@ class RedmineClient:
             headers={"X-Redmine-API-Key": self._key, "Content-Type": "application/json"},
             timeout=httpx.Timeout(60.0),
             verify=verify_ssl,
+            # Do not let SSL_CERT_FILE / proxy env vars override verify=False (self-signed Redmine).
+            trust_env=False,
         )
 
     async def aclose(self) -> None:
@@ -201,6 +203,113 @@ class RedmineClient:
         r = await self._client.get(f"/users/{user_id}.json")
         r.raise_for_status()
         return r.json()["user"]
+
+    async def _verify_redmine_user_id_personal(self, uid: int) -> None:
+        """
+        Verify user id for a per-user API key when ``/users/current.json`` may be forbidden.
+
+        Tries, in order: current user, user#show for ``uid``, issues by assignee, time entries.
+        """
+        _PERSONAL_FAIL = (
+            "Redmine отклонил доступ к API (403/401). Проверьте: ключ в Redmine "
+            "(Моя учётная запись → API), в «Администрирование → Настройки → Общие» включён REST, "
+            "у роли есть право на API. Если /users/current.json отдаёт 403 (плагины), "
+            "укажите корректный numeric id пользователя — подтверждение идёт через другие методы."
+        )
+
+        r = await self._client.get("/users/current.json")
+        if r.status_code == 200:
+            try:
+                cur = int(r.json()["user"]["id"])
+            except (KeyError, TypeError, ValueError) as e:
+                raise ValueError("Redmine /users/current.json: unexpected JSON") from e
+            if cur != uid:
+                raise ValueError(
+                    f"Redmine user id должен быть {cur} (владелец API-ключа); "
+                    f"сейчас указано {uid}."
+                )
+            return
+
+        if r.status_code in (401,):
+            raise ValueError(
+                "Redmine вернул 401 для /users/current.json — неверный или отозванный API-ключ."
+            ) from None
+
+        r2 = await self._client.get(f"/users/{uid}.json")
+        if r2.status_code == 200:
+            try:
+                ju = r2.json().get("user") or {}
+                if int(ju.get("id", 0)) == uid:
+                    return
+            except (KeyError, TypeError, ValueError):
+                pass
+
+        r3 = await self._client.get(
+            "/issues.json",
+            params={"assigned_to_id": uid, "limit": 1},
+        )
+        if r3.status_code == 200:
+            return
+
+        r3b = await self._client.get("/issues.json", params={"limit": 1})
+        if r3b.status_code == 200:
+            return
+
+        r4 = await self._client.get(
+            "/time_entries.json",
+            params={"user_id": uid, "limit": 1},
+        )
+        if r4.status_code == 200:
+            return
+
+        r5 = await self._client.get("/projects.json", params={"limit": 1})
+        if r5.status_code == 200:
+            return
+
+        detail = (
+            f" (коды: current={r.status_code}, users/{uid}={r2.status_code}, "
+            f"issues(assignee)={r3.status_code}, issues={r3b.status_code}, "
+            f"time_entries={r4.status_code}, projects={r5.status_code})"
+        )
+        raise ValueError(_PERSONAL_FAIL + detail) from None
+
+    async def verify_redmine_user_id(
+        self, user_id: int, *, use_personal_key: bool
+    ) -> None:
+        """
+        Confirm that ``user_id`` is consistent with the API key in Redmine.
+
+        **Personal** keys: some Redmine / plugins return 403 on ``/users/current.json``;
+        we then try ``/users/{id}.json`` (own profile), then ``issues`` / ``time_entries``.
+
+        **Service** (shared admin) key: ``GET /users/:id`` if allowed; on 403,
+        a minimal issues query by ``assigned_to_id`` is used.
+        """
+        if use_personal_key:
+            await self._verify_redmine_user_id_personal(int(user_id))
+            return
+
+        try:
+            await self.get_user(user_id)
+            return
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
+                raise ValueError("Redmine user not found for this id") from e
+            if e.response.status_code not in (401, 403):
+                raise
+        try:
+            r = await self._client.get(
+                "/issues.json",
+                params={"assigned_to_id": int(user_id), "limit": 1},
+            )
+            r.raise_for_status()
+            return
+        except httpx.HTTPError as e:
+            raise ValueError(
+                "Cannot verify Redmine user id: the service API key has no right to read "
+                "this user. Use a per-user key in the profile, or a Redmine admin key in "
+                f"R3 settings. ({e!s})"
+            ) from e
 
     async def current_user_id(self) -> int:
         """

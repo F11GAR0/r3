@@ -80,6 +80,19 @@ def require_min_role(min_role: Role):
     return _dep
 
 
+def redmine_httpx_verify(c: AppSettings, user: User | None = None) -> bool:
+    """
+    Return httpx ``verify`` for Redmine: True = verify TLS; False = skip (self-signed).
+
+    Global: ``AppSettings.redmine_insecure_ssl``. Per-user: ``User.redmine_skip_tls`` (either
+    alone or together with global).
+    """
+    skip = bool(getattr(c, "redmine_insecure_ssl", False))
+    if user is not None and bool(getattr(user, "redmine_skip_tls", False)):
+        skip = True
+    return not skip
+
+
 async def get_or_create_settings(session: AsyncSession) -> AppSettings:
     """
     Return global AppSettings row (id=1), creating with defaults if missing.
@@ -118,5 +131,23 @@ async def make_redmine_client(session: AsyncSession) -> RedmineClient:
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Redmine not configured"
         )
     key = decrypt_secret(c.redmine_api_key_encrypted)
-    verify_ssl = not bool(c.redmine_insecure_ssl)
-    return RedmineClient(c.redmine_base_url, key, verify_ssl=verify_ssl)
+    return RedmineClient(c.redmine_base_url, key, verify_ssl=redmine_httpx_verify(c, None))
+
+
+async def make_redmine_client_for_user(session: AsyncSession, user: User) -> RedmineClient:
+    """
+    Use the user's own Redmine API key if set; otherwise the global key from settings.
+
+    Per-user keys let non-admin Redmine accounts use the REST API as themselves.
+    """
+    c = await get_or_create_settings(session)
+    if not c.redmine_base_url:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Redmine not configured"
+        )
+    v = redmine_httpx_verify(c, user)
+    enc = getattr(user, "redmine_api_key_encrypted", None)
+    if enc:
+        key = decrypt_secret(str(enc))
+        return RedmineClient(c.redmine_base_url, key, verify_ssl=v)
+    return await make_redmine_client(session)

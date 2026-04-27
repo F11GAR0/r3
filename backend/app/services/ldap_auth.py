@@ -34,6 +34,17 @@ class LdapUserInfo:
     full_name: str | None = None
 
 
+def _user_info_from_ldap_entry(username: str, entry: object) -> LdapUserInfo:
+    """Map ldap3 entry to LdapUserInfo (mail, displayName/cn)."""
+    email = str(entry.mail) if hasattr(entry, "mail") and entry.mail else None
+    full_name: str | None = None
+    if hasattr(entry, "displayName") and entry.displayName:
+        full_name = str(entry.displayName)
+    elif hasattr(entry, "cn") and entry.cn:
+        full_name = str(entry.cn)
+    return LdapUserInfo(username=username, email=email, full_name=full_name)
+
+
 def _env_ldap_config() -> LdapConnectionConfig | None:
     """Build config from environment if all required fields are set."""
     s = get_settings()
@@ -76,6 +87,40 @@ async def resolve_ldap_config(session: AsyncSession) -> LdapConnectionConfig | N
     return _env_ldap_config()
 
 
+def lookup_ldap_user(username: str, cfg: LdapConnectionConfig) -> LdapUserInfo | None:
+    """
+    Service bind + search for ``username``; return attributes without checking user password.
+
+    Use to provision a DB user before first LDAP login.
+    """
+    flt = cfg.user_filter.format(username=username)
+    conn: Connection | None = None
+    try:
+        server = Server(cfg.server_uri, get_info=ALL)
+        conn = Connection(
+            server,
+            user=cfg.bind_dn,
+            password=cfg.bind_password,
+            auto_bind=True,
+        )
+        conn.search(
+            cfg.user_base_dn,
+            flt,
+            attributes=["mail", "cn", "displayName", "uid"],
+        )
+        if not conn.entries:
+            return None
+        return _user_info_from_ldap_entry(username, conn.entries[0])
+    except LDAPException:
+        return None
+    finally:
+        if conn is not None:
+            try:
+                conn.unbind()
+            except Exception:  # noqa: S110
+                pass
+
+
 def try_ldap_auth(username: str, password: str, cfg: LdapConnectionConfig) -> LdapUserInfo | None:
     """
     Search for the user DN and try to bind with the supplied password.
@@ -109,13 +154,7 @@ def try_ldap_auth(username: str, password: str, cfg: LdapConnectionConfig) -> Ld
         user_dn = entry.entry_dn
         uconn = Connection(server, user=user_dn, password=password, auto_bind=True)
         uconn.unbind()
-        email = str(entry.mail) if hasattr(entry, "mail") else None
-        full_name: str | None = None
-        if hasattr(entry, "displayName") and entry.displayName:
-            full_name = str(entry.displayName)
-        elif hasattr(entry, "cn") and entry.cn:
-            full_name = str(entry.cn)
-        return LdapUserInfo(username=username, email=email, full_name=full_name)
+        return _user_info_from_ldap_entry(username, entry)
     except LDAPException:
         return None
     finally:
