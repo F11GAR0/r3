@@ -80,17 +80,13 @@ def require_min_role(min_role: Role):
     return _dep
 
 
-def redmine_httpx_verify(c: AppSettings, user: User | None = None) -> bool:
+def redmine_httpx_verify(c: AppSettings) -> bool:
     """
     Return httpx ``verify`` for Redmine: True = verify TLS; False = skip (self-signed).
 
-    Global: ``AppSettings.redmine_insecure_ssl``. Per-user: ``User.redmine_skip_tls`` (either
-    alone or together with global).
+    Only global ``AppSettings.redmine_insecure_ssl`` (admin «Настройки»).
     """
-    skip = bool(getattr(c, "redmine_insecure_ssl", False))
-    if user is not None and bool(getattr(user, "redmine_skip_tls", False)):
-        skip = True
-    return not skip
+    return not bool(getattr(c, "redmine_insecure_ssl", False))
 
 
 async def get_or_create_settings(session: AsyncSession) -> AppSettings:
@@ -131,7 +127,7 @@ async def make_redmine_client(session: AsyncSession) -> RedmineClient:
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Redmine not configured"
         )
     key = decrypt_secret(c.redmine_api_key_encrypted)
-    return RedmineClient(c.redmine_base_url, key, verify_ssl=redmine_httpx_verify(c, None))
+    return RedmineClient(c.redmine_base_url, key, verify_ssl=redmine_httpx_verify(c))
 
 
 async def make_redmine_client_for_user(session: AsyncSession, user: User) -> RedmineClient:
@@ -145,7 +141,7 @@ async def make_redmine_client_for_user(session: AsyncSession, user: User) -> Red
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Redmine not configured"
         )
-    v = redmine_httpx_verify(c, user)
+    v = redmine_httpx_verify(c)
     enc = getattr(user, "redmine_api_key_encrypted", None)
     if enc:
         key = decrypt_secret(str(enc))

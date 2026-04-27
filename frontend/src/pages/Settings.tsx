@@ -78,6 +78,9 @@ export default function Settings() {
   const [bootstrapErr, setBootstrapErr] = useState("");
   const [bootstrapSaving, setBootstrapSaving] = useState(false);
   const [socks5Text, setSocks5Text] = useState("");
+  const [redmineMsg, setRedmineMsg] = useState("");
+  const [redmineErr, setRedmineErr] = useState("");
+  const [redmineSaving, setRedmineSaving] = useState(false);
 
   const canBootstrapPassword =
     isAdmin(user) && (isSuperAdmin(user) || user?.username === "admin");
@@ -149,6 +152,8 @@ export default function Settings() {
         Настройки
       </h1>
       {msg && <p className="text-sm text-green-700">{msg}</p>}
+      {redmineMsg && <p className="text-sm text-green-700">{redmineMsg}</p>}
+      {redmineErr && <p className="text-sm text-red-600">{redmineErr}</p>}
       {s && (
         <p className="text-sm text-slate-500">
           Redmine: {s.has_redmine ? "подключён" : "не настроен"} · ИИ:{" "}
@@ -158,9 +163,13 @@ export default function Settings() {
       )}
       <div
         className="card max-w-2xl space-y-3"
-        title="Самоподписанный сертификат: отключает проверку TLS к Redmine"
+        title="Подключение к Redmine и глобальная политика TLS для всех пользователей"
       >
         <h2 className="font-medium">Redmine</h2>
+        <p className="text-xs text-slate-500">
+          Проверка TLS к серверу Redmine задаётся только здесь (для всех пользователей). При
+          самоподписанном HTTPS включите «не проверять TLS» и сохраните этот блок.
+        </p>
         <label className="text-sm text-slate-600">Base URL (без конечного /)</label>
         <input
           className="w-full rounded border border-slate-300 px-3 py-2"
@@ -178,14 +187,14 @@ export default function Settings() {
         />
         <label
           className="flex items-center gap-2 text-sm text-slate-700"
-          title="Включите, если Redmine с HTTPS и самоподписанным сертификатом"
+          title="Глобально для всех запросов R3 к Redmine: отключить проверку TLS (HTTPS с самоподписанным сертификатом)"
         >
           <input
             type="checkbox"
             checked={insecure}
             onChange={(e) => setInsecure(e.target.checked)}
           />
-          Самоподписанный сертификат (не проверять TLS)
+          Не проверять TLS к Redmine (глобально, самоподписанный сертификат)
         </label>
         <div className="grid gap-2 sm:grid-cols-2">
           <div>
@@ -228,6 +237,46 @@ export default function Settings() {
             value={proj}
             onChange={(e) => setProj(e.target.value)}
           />
+        </div>
+        <div>
+          <button
+            type="button"
+            className="btn-primary inline-flex items-center gap-2"
+            disabled={redmineSaving}
+            onClick={async () => {
+              setRedmineMsg("");
+              setRedmineErr("");
+              setMsg("");
+              setRedmineSaving(true);
+              try {
+                const body: Record<string, unknown> = {
+                  redmine_base_url: url || null,
+                  redmine_insecure_ssl: insecure,
+                  sprint_lifecycle_days: sprint,
+                  project_id: proj ? parseInt(proj, 10) : null,
+                };
+                if (apiKey.trim()) {
+                  body.redmine_api_key = apiKey.trim();
+                }
+                if (cfid.trim()) {
+                  body.redmine_complexity_field_id = parseInt(cfid, 10);
+                } else {
+                  body.redmine_complexity_field_id = null;
+                }
+                await jsonFetch<Sett>("/api/settings", { method: "PUT", body: JSON.stringify(body) });
+                setRedmineMsg("Настройки Redmine сохранены.");
+                setApiKey("");
+                await load();
+              } catch (e) {
+                setRedmineErr(e instanceof Error ? e.message : "Ошибка сохранения");
+              } finally {
+                setRedmineSaving(false);
+              }
+            }}
+          >
+            {redmineSaving && <Loader2 className="h-4 w-4 shrink-0 animate-spin" />}
+            Сохранить настройки Redmine
+          </button>
         </div>
       </div>
 
@@ -648,7 +697,7 @@ export default function Settings() {
           autoComplete="off"
         />
         <p className="text-xs text-slate-500">
-          Пустое поле — без прокси. Сохраняется вместе с кнопкой «Сохранить» в блоке ключей ниже.
+          Пустое поле — без прокси. Сохраняется кнопкой «Сохранить настройки ИИ» ниже.
         </p>
       </div>
 
@@ -718,33 +767,22 @@ export default function Settings() {
             className="btn-primary"
             onClick={async () => {
               setMsg("");
+              setRedmineMsg("");
+              setRedmineErr("");
               const socksLines = socks5Text
                 .split("\n")
                 .map((l) => l.trim())
                 .filter(Boolean);
               const body: Record<string, unknown> = {
-                redmine_base_url: url || null,
-                redmine_insecure_ssl: insecure,
-                sprint_lifecycle_days: sprint,
-                project_id: proj ? parseInt(proj, 10) : null,
                 ai_keys: keys.map((k) => ({ provider: k.provider, name: k.name, key: k.key })),
                 ai_socks5_proxies: socksLines,
               };
-              if (apiKey.trim()) {
-                body.redmine_api_key = apiKey.trim();
-              }
-              if (cfid.trim()) {
-                body.redmine_complexity_field_id = parseInt(cfid, 10);
-              } else {
-                body.redmine_complexity_field_id = null;
-              }
               await jsonFetch<Sett>("/api/settings", { method: "PUT", body: JSON.stringify(body) });
-              setMsg("Сохранено.");
-              setApiKey("");
+              setMsg("Настройки ИИ сохранены.");
               await load();
             }}
           >
-            Сохранить
+            Сохранить настройки ИИ
           </button>
         </div>
       </div>

@@ -43,8 +43,9 @@ export default function Home() {
           <div>
             <h2 className="font-semibold text-slate-800">Админ и Redmine</h2>
             <p className="text-sm text-slate-500">
-              В разделе «Настройки» (роль администратора) укажите URL и API-ключ Redmine, лимит
-              «Sprint Livecycle» в днях и, при необходимости, ключи ИИ. Привяжите свой
+              В разделе «Настройки» (роль администратора) укажите URL и API-ключ Redmine, при
+              самоподписанном HTTPS — глобальный флаг «не проверять TLS», лимит «Sprint Livecycle» в
+              днях и, при необходимости, ключи ИИ. Привяжите свой
               <span className="font-medium"> redmine user id</span> в разделе профиля (пока
               вручную в UI профиля).
             </p>

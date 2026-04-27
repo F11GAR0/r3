@@ -76,9 +76,7 @@ export default function Wizard() {
   const [hint, setHint] = useState<Hint | null>(null);
   const [err, setErr] = useState("");
   const [linkSaving, setLinkSaving] = useState(false);
-  const [skipTls, setSkipTls] = useState(false);
   const [skipApiVerify, setSkipApiVerify] = useState(false);
-  const [tlsSaving, setTlsSaving] = useState(false);
   const [aiLoading, setAiLoading] = useState(false);
   const [card, setCard] = useState<Issue | null>(null);
   const [cardLoading, setCardLoading] = useState(false);
@@ -105,10 +103,6 @@ export default function Wizard() {
       void load();
     }
   }, [load, user?.redmine_user_id]);
-
-  useEffect(() => {
-    setSkipTls(!!user?.redmine_skip_tls);
-  }, [user?.redmine_skip_tls]);
 
   const cur = q[ix] ?? null;
   const curId = cur?.id;
@@ -188,14 +182,6 @@ export default function Wizard() {
             value={rmKey}
             onChange={(e) => setRmKey(e.target.value)}
           />
-          <label className="flex items-center gap-2 text-sm text-slate-700">
-            <input
-              type="checkbox"
-              checked={skipTls}
-              onChange={(e) => setSkipTls(e.target.checked)}
-            />
-            Не проверять TLS (самоподписанный Redmine)
-          </label>
           <label className="flex items-start gap-2 text-sm text-slate-700">
             <input
               type="checkbox"
@@ -223,7 +209,6 @@ export default function Wizard() {
                 }
                 const body: Record<string, string | number | boolean> = {
                   redmine_user_id: n,
-                  redmine_skip_tls: skipTls,
                 };
                 if (rmKey.trim()) {
                   body.redmine_api_key = rmKey.trim();
@@ -261,38 +246,6 @@ export default function Wizard() {
         >
           Task Wizard
         </h1>
-        <div className="flex flex-wrap items-center justify-center gap-2 text-sm">
-          <label className="flex cursor-pointer items-center gap-2 text-slate-600">
-            <input
-              type="checkbox"
-              checked={skipTls}
-              onChange={(e) => setSkipTls(e.target.checked)}
-            />
-            Не проверять TLS к Redmine
-          </label>
-          <button
-            type="button"
-            className="btn-ghost text-xs"
-            disabled={tlsSaving}
-            onClick={async () => {
-              setErr("");
-              setTlsSaving(true);
-              try {
-                await jsonFetch("/api/profile", {
-                  method: "PATCH",
-                  body: JSON.stringify({ redmine_skip_tls: skipTls }),
-                });
-                void refresh();
-              } catch (e) {
-                setErr(e instanceof Error ? e.message : "Ошибка");
-              } finally {
-                setTlsSaving(false);
-              }
-            }}
-          >
-            {tlsSaving ? "…" : "Сохранить TLS"}
-          </button>
-        </div>
         {err && <p className="text-center text-sm text-red-600">{err}</p>}
 
         <div

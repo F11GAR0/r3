@@ -27,7 +27,6 @@ class UserOut(BaseModel):
     role: str
     redmine_user_id: int | None = None
     has_redmine_api_key: bool = False
-    redmine_skip_tls: bool = False
     is_ldap: bool = False
     # Effective AI system prompts (defaults merged with users.ai_prompts_json)
     ai_prompts: dict[str, str] = Field(
@@ -54,7 +53,6 @@ def build_user_out(user: object) -> UserOut:
         role=str(getattr(u, "role", "user")),
         redmine_user_id=getattr(u, "redmine_user_id", None),
         has_redmine_api_key=bool(getattr(u, "redmine_api_key_encrypted", None)),
-        redmine_skip_tls=bool(getattr(u, "redmine_skip_tls", False)),
         is_ldap=bool(getattr(u, "is_ldap", False)),
         ai_prompts=ai_client.effective_ai_prompts(getattr(u, "ai_prompts_json", None)),
     )

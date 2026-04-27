@@ -87,7 +87,6 @@ export default function Workbench() {
   const [subtaskSubmitting, setSubtaskSubmitting] = useState<number | null>(null);
   const [profileSaving, setProfileSaving] = useState(false);
   const [rmKey, setRmKey] = useState("");
-  const [skipTls, setSkipTls] = useState(false);
   const [skipApiVerify, setSkipApiVerify] = useState(false);
   const [openById, setOpenById] = useState("");
   const [openByIdLoading, setOpenByIdLoading] = useState(false);
@@ -212,10 +211,6 @@ export default function Workbench() {
   }, [sug]);
 
   useEffect(() => {
-    setSkipTls(!!user?.redmine_skip_tls);
-  }, [user?.redmine_skip_tls]);
-
-  useEffect(() => {
     const root = splitScrollRef.current;
     const target = sugLoadMoreRef.current;
     if (!root || !target) {
@@ -264,14 +259,6 @@ export default function Workbench() {
             onChange={(e) => setRmKey(e.target.value)}
             placeholder="скопируйте из My account → API access"
           />
-          <label className="flex items-center gap-2 text-sm text-slate-700">
-            <input
-              type="checkbox"
-              checked={skipTls}
-              onChange={(e) => setSkipTls(e.target.checked)}
-            />
-            Не проверять TLS (самоподписанный Redmine)
-          </label>
           <label className="flex items-start gap-2 text-sm text-slate-700">
             <input
               type="checkbox"
@@ -299,7 +286,6 @@ export default function Workbench() {
                 }
                 const body: Record<string, string | number | boolean> = {
                   redmine_user_id: n,
-                  redmine_skip_tls: skipTls,
                 };
                 if (rmKey.trim()) {
                   body.redmine_api_key = rmKey.trim();
@@ -337,40 +323,9 @@ export default function Workbench() {
       <p className="text-sm text-slate-500">
         Показаны открытые назначенные вам задачи, отфильтрованные по «протуханию»
         (дольше, чем Sprint Livecycle, от последнего обновления). Кружок — наглядная шкала
-        от порога спринта до 600 дней, оттенок смещается каждые 14 дней.
+        от порога спринта до 600 дней, оттенок смещается каждые 14 дней. Проверка TLS к Redmine —
+        глобально в «Настройки» (админ).
       </p>
-      <div className="flex flex-wrap items-center gap-3 rounded-lg border border-slate-200 bg-slate-50/80 px-3 py-2 text-sm">
-        <label className="flex cursor-pointer items-center gap-2 text-slate-700">
-          <input
-            type="checkbox"
-            checked={skipTls}
-            onChange={(e) => setSkipTls(e.target.checked)}
-          />
-          Не проверять TLS к Redmine
-        </label>
-        <button
-          type="button"
-          className="btn-ghost text-sm"
-          disabled={profileSaving}
-          onClick={async () => {
-            setErr("");
-            setProfileSaving(true);
-            try {
-              await jsonFetch("/api/profile", {
-                method: "PATCH",
-                body: JSON.stringify({ redmine_skip_tls: skipTls }),
-              });
-              await refresh();
-            } catch (e) {
-              setErr(e instanceof Error ? e.message : "Ошибка");
-            } finally {
-              setProfileSaving(false);
-            }
-          }}
-        >
-          {profileSaving ? "…" : "Сохранить"}
-        </button>
-      </div>
       {err && <p className="text-sm text-red-600">{err}</p>}
       <div className="flex flex-wrap items-end gap-2 rounded-lg border border-slate-200/80 bg-slate-50/50 px-3 py-2">
         <div className="flex min-w-[12rem] flex-1 flex-col gap-0.5">

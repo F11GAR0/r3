@@ -26,10 +26,6 @@ class ProfilePatch(BaseModel):
         None,
         description="Per-user key from Redmine; empty string removes stored key",
     )
-    redmine_skip_tls: bool | None = Field(
-        None,
-        description="If True, do not verify TLS to Redmine (per-user, self-signed)",
-    )
     skip_redmine_verify: bool | None = Field(
         None,
         description="If True, save id/key without calling Redmine (e.g. 403 from R3 server IP)",
@@ -40,20 +36,9 @@ class ProfilePatch(BaseModel):
     )
 
 
-def _profile_redmine_verify_ssl(
-    c: AppSettings, user: User, body: ProfilePatch, fields: set[str]
-) -> bool:
-    """
-    Httpx ``verify`` for this PATCH: global insecure flag and per-user ``redmine_skip_tls``
-    (from body if present, else DB).
-    """
-    skip = bool(c.redmine_insecure_ssl)
-    if "redmine_skip_tls" in fields:
-        user_skip = bool(body.redmine_skip_tls)
-    else:
-        user_skip = bool(getattr(user, "redmine_skip_tls", False))
-    skip = skip or user_skip
-    return not skip
+def _profile_redmine_verify_ssl(c: AppSettings) -> bool:
+    """Httpx ``verify`` for Redmine verify during PATCH: global setting only."""
+    return not bool(c.redmine_insecure_ssl)
 
 
 def _skip_redmine_verify_requested(body: ProfilePatch, fields: set[str]) -> bool:
@@ -86,7 +71,7 @@ async def patch_profile(
         body, fields
     ):
         base = c.redmine_base_url.strip().rstrip("/")
-        verify_ssl = _profile_redmine_verify_ssl(c, user, body, fields)
+        verify_ssl = _profile_redmine_verify_ssl(c)
         incoming = (
             body.redmine_api_key.strip()
             if body.redmine_api_key is not None and body.redmine_api_key.strip()
@@ -134,8 +119,6 @@ async def patch_profile(
             user.redmine_api_key_encrypted = encrypt_secret(str(v).strip())
     if body.redmine_user_id is not None:
         user.redmine_user_id = int(body.redmine_user_id)
-    if "redmine_skip_tls" in fields:
-        user.redmine_skip_tls = bool(body.redmine_skip_tls)
     if body.ai_prompts is not None:
         allowed = ("split_system", "complexity_system", "wizard_system")
         pbase = dict(user.ai_prompts_json) if isinstance(user.ai_prompts_json, dict) else {}
