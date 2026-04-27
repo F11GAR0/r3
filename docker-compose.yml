@@ -1,0 +1,51 @@
+# R3: Postgres, API, frontend, optional TLS (mkcert/openssl init in scripts/tls-init.sh)
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: r3
+      POSTGRES_PASSWORD: r3
+      POSTGRES_DB: r3
+    volumes:
+      - r3pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U r3"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build: ./backend
+    environment:
+      DATABASE_URL: postgresql+asyncpg://r3:r3@db:5432/r3
+      SECRET_KEY: ${R3_SECRET_KEY:-dev-change-me-please-use-32-random-chars!}
+      CORS_ORIGINS: http://localhost,http://localhost:80,https://localhost,https://localhost:4443,http://127.0.0.1,http://127.0.0.1:80
+      LDAP_SERVER_URI: ${LDAP_SERVER_URI:-}
+      LDAP_BIND_DN: ${LDAP_BIND_DN:-}
+      LDAP_BIND_PASSWORD: ${LDAP_BIND_PASSWORD:-}
+      LDAP_USER_BASE_DN: ${LDAP_USER_BASE_DN:-}
+      TLS_CERT_DIR: /certs
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    volumes:
+      - r3certs:/certs:rw
+    command: >
+      sh -c "uvicorn app.main:app --host 0.0.0.0 --port 8000"
+
+  web:
+    build: ./frontend
+    ports:
+      - "80:80"
+      - "4443:443"
+    depends_on:
+      - api
+    volumes:
+      - r3certs:/certs:rw
+    # nginx config expects certs at /certs; HTTP always works, HTTPS if certs present
+
+volumes:
+  r3pg: {}
+  r3certs: {}

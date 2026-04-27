@@ -1,0 +1,63 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# Env and local secrets (never commit)
+.env
+.env.*
+!.env.example
+
+# Python
+backend/.venv/
+**/__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg
+*.egg-info/
+.eggs/
+dist/
+build/
+pip-wheel-metadata/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+coverage.xml
+htmlcov/
+.tox/
+*.cover
+.hypothesis/
+
+# Node / frontend
+frontend/node_modules/
+frontend/dist/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.pnpm-store/
+*.tsbuildinfo
+
+# IDE & tools
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Local TLS / CA material (do not commit generated keys)
+certs/
+
+# Local DB dumps & sqlite
+*.sqlite
+*.sqlite3
+
+# Logs and temp
+*.log
+tmp/
+temp/
+
+# Optional: Cursor / local agent artifacts (uncomment if desired)
+# .cursor/
