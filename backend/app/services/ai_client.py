@@ -15,6 +15,7 @@ from typing import Any, Iterator
 import httpx
 
 from app.core.crypto_secrets import decrypt_secret
+from app.services.ai_content_sanitizer import redact_for_llm
 
 logger = logging.getLogger(__name__)
 
@@ -608,12 +609,13 @@ def _call_provider(e: APIKeyEntry, system: str, user: str, client: httpx.Client)
     Args:
         e: Key entry to bill against.
         system: System prompt.
-        user: User content.
+        user: User content (issue text, etc.); redacted for PII before send.
         client: HTTP client (SOCKS5 if configured in outer ``_ai_http_client``).
 
     Returns:
         Model text.
     """
+    user = redact_for_llm(user)
     if e.provider == AIProvider.OPENAI:
         return _openai_complete(
             client,
