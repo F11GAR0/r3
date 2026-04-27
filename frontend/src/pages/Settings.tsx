@@ -1,5 +1,5 @@
-import { Loader2 } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { Check, ChevronDown, Loader2 } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { jsonFetch } from "../api";
 import { isAdmin, isSuperAdmin, useAuth } from "../auth";
 
@@ -40,6 +40,72 @@ function newKeyRowId(): string {
 }
 
 type ProviderInfo = { id: string; label: string };
+
+type SectionKey = "redmine" | "ldap" | "users" | "bootstrap" | "aiProv" | "aiKeys";
+
+const DEFAULT_SECTIONS_OPEN: Record<SectionKey, boolean> = {
+  redmine: true,
+  ldap: true,
+  users: true,
+  bootstrap: true,
+  aiProv: true,
+  aiKeys: true,
+};
+
+function StatusCheck({ ok, label }: { ok: boolean; label: string }) {
+  if (!ok) {
+    return null;
+  }
+  return <Check className="h-5 w-5 shrink-0 text-emerald-600" strokeWidth={2.5} aria-label={label} title={label} />;
+}
+
+function CollapsibleSection({
+  id,
+  title,
+  open,
+  onToggle,
+  statusIcon,
+  children,
+}: {
+  id: string;
+  title: string;
+  open: boolean;
+  onToggle: () => void;
+  statusIcon?: ReactNode;
+  children: ReactNode;
+}) {
+  return (
+    <section
+      id={id}
+      className="card w-full max-w-none scroll-mt-4 border border-slate-200/90 shadow-sm"
+    >
+      <button
+        type="button"
+        onClick={onToggle}
+        className="flex w-full items-center justify-between gap-3 rounded-t-lg bg-slate-50/60 px-4 py-3 text-left transition hover:bg-slate-100/80"
+        aria-expanded={open}
+        aria-controls={`${id}-panel`}
+        id={`${id}-head`}
+      >
+        <span className="flex min-w-0 items-center gap-2.5">
+          {statusIcon}
+          <h2 className="font-medium text-slate-900">{title}</h2>
+        </span>
+        <ChevronDown
+          className={`h-5 w-5 shrink-0 text-slate-500 transition-transform duration-200 ${
+            open ? "rotate-180" : ""
+          }`}
+          aria-hidden
+        />
+      </button>
+      {open && (
+        <div className="space-y-3 border-t border-slate-100/90 px-4 py-4" id={`${id}-panel`}>
+          {children}
+        </div>
+      )}
+    </section>
+  );
+}
 
 /**
  * Admin: Redmine, list field for complexity, AI keys (full list on save, delete row), provider test.
@@ -85,9 +151,40 @@ export default function Settings() {
   const [redmineMsg, setRedmineMsg] = useState("");
   const [redmineErr, setRedmineErr] = useState("");
   const [redmineSaving, setRedmineSaving] = useState(false);
+  const [sectionOpen, setSectionOpen] = useState<Record<SectionKey, boolean>>(
+    () => ({ ...DEFAULT_SECTIONS_OPEN })
+  );
 
   const canBootstrapPassword =
     isAdmin(user) && (isSuperAdmin(user) || user?.username === "admin");
+
+  const navItems = useMemo(() => {
+    const items: { key: SectionKey; id: string; label: string }[] = [
+      { key: "redmine", id: "settings-redmine", label: "Redmine" },
+      { key: "ldap", id: "settings-ldap", label: "LDAP" },
+    ];
+    if (isAdmin(user) && roleRows.length > 0) {
+      items.push({ key: "users", id: "settings-users", label: "Роли и пользователи" });
+    }
+    if (canBootstrapPassword) {
+      items.push({ key: "bootstrap", id: "settings-bootstrap", label: "Пароль admin" });
+    }
+    items.push(
+      { key: "aiProv", id: "settings-ai-providers", label: "Провайдеры ИИ" },
+      { key: "aiKeys", id: "settings-ai-keys", label: "API-ключи ИИ" }
+    );
+    return items;
+  }, [user, roleRows.length, canBootstrapPassword]);
+
+  const goToSection = useCallback(
+    (key: SectionKey, eid: string) => {
+      setSectionOpen((o) => ({ ...o, [key]: true }));
+      requestAnimationFrame(() => {
+        document.getElementById(eid)?.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+    },
+    []
+  );
 
   const load = useCallback(async () => {
     const j = await jsonFetch<Sett>("/api/settings");
@@ -157,25 +254,52 @@ export default function Settings() {
   }, [user]);
 
   return (
-    <div className="space-y-6">
+    <div className="mx-auto w-full max-w-7xl px-2 pb-10 sm:px-4">
       <h1 className="text-xl font-bold" title="Только роль admin/superadmin">
         Настройки
       </h1>
       {msg && <p className="text-sm text-green-700">{msg}</p>}
       {redmineMsg && <p className="text-sm text-green-700">{redmineMsg}</p>}
       {redmineErr && <p className="text-sm text-red-600">{redmineErr}</p>}
-      {s && (
-        <p className="text-sm text-slate-500">
-          Redmine: {s.has_redmine ? "подключён" : "не настроен"} · ИИ:{" "}
-          {s.has_ai ? "есть ключи" : "нет ключей"} · LDAP:{" "}
-          {s.ldap_effective ? "доступен для входа" : "не настроен"}
-        </p>
-      )}
-      <div
-        className="card max-w-2xl space-y-3"
-        title="Подключение к Redmine и глобальная политика TLS для всех пользователей"
+
+      <div className="mt-6 flex flex-col gap-6 lg:flex-row lg:items-start lg:gap-10">
+        <nav
+          className="shrink-0 rounded-xl border border-slate-200/90 bg-slate-50/50 p-2 lg:sticky lg:top-6 lg:w-52 lg:border-0 lg:bg-transparent lg:p-0"
+          aria-label="Навигация по настройкам"
+        >
+          <p className="mb-1.5 px-2 text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+            Разделы
+          </p>
+          <ul className="flex flex-wrap gap-0.5 lg:flex-col">
+            {navItems.map((item) => (
+              <li key={item.id} className="min-w-0">
+                <button
+                  type="button"
+                  onClick={() => goToSection(item.key, item.id)}
+                  className="w-full max-w-full truncate rounded-lg px-2.5 py-1.5 text-left text-sm text-slate-600 transition hover:bg-emerald-100/50 hover:text-slate-900 lg:px-3"
+                >
+                  {item.label}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </nav>
+
+        <div className="min-w-0 flex-1 space-y-4">
+      <CollapsibleSection
+        id="settings-redmine"
+        title="Redmine"
+        open={sectionOpen.redmine}
+        onToggle={() => setSectionOpen((o) => ({ ...o, redmine: !o.redmine }))}
+        statusIcon={
+          s ? (
+            <StatusCheck
+              ok={s.has_redmine}
+              label="Redmine: URL и API-ключ настроены"
+            />
+          ) : null
+        }
       >
-        <h2 className="font-medium">Redmine</h2>
         <p className="text-xs text-slate-500">
           Проверка TLS к серверу Redmine задаётся только здесь (для всех пользователей). При
           самоподписанном HTTPS включите «не проверять TLS» и сохраните этот блок.
@@ -288,10 +412,22 @@ export default function Settings() {
             Сохранить настройки Redmine
           </button>
         </div>
-      </div>
+      </CollapsibleSection>
 
-      <div className="card max-w-2xl space-y-3">
-        <h2 className="font-medium">LDAP</h2>
+      <CollapsibleSection
+        id="settings-ldap"
+        title="LDAP"
+        open={sectionOpen.ldap}
+        onToggle={() => setSectionOpen((o) => ({ ...o, ldap: !o.ldap }))}
+        statusIcon={
+          s ? (
+            <StatusCheck
+              ok={s.ldap_effective}
+              label="LDAP: вход с этими настройками доступен"
+            />
+          ) : null
+        }
+      >
         <p className="text-xs text-slate-500">
           Если включено и заполнены URI и base DN, вход использует эти настройки. Иначе можно
           задать LDAP через переменные окружения бэкенда (как раньше). Пароль bind: пустое поле при
@@ -447,11 +583,15 @@ export default function Settings() {
             Проверить bind (+ опционально пользователя)
           </button>
         </div>
-      </div>
+      </CollapsibleSection>
 
       {isAdmin(user) && roleRows.length > 0 && (
-        <div className="card max-w-2xl space-y-3">
-          <h2 className="font-medium">Роли и пользователи</h2>
+        <CollapsibleSection
+          id="settings-users"
+          title="Роли и пользователи"
+          open={sectionOpen.users}
+          onToggle={() => setSectionOpen((o) => ({ ...o, users: !o.users }))}
+        >
           <p className="text-sm text-slate-600">
             Старшие роли в порядке привилегий: <strong>superadmin</strong> → <strong>admin</strong>{" "}
             → <strong>product_manager</strong> → <strong>user</strong>. Супер-админ может
@@ -571,12 +711,16 @@ export default function Settings() {
               </tbody>
             </table>
           </div>
-        </div>
+        </CollapsibleSection>
       )}
 
       {canBootstrapPassword && (
-        <div className="card max-w-2xl space-y-3">
-          <h2 className="font-medium">Пароль встроенной учётки admin</h2>
+        <CollapsibleSection
+          id="settings-bootstrap"
+          title="Пароль встроенной учётки admin"
+          open={sectionOpen.bootstrap}
+          onToggle={() => setSectionOpen((o) => ({ ...o, bootstrap: !o.bootstrap }))}
+        >
           <p className="text-xs text-slate-500">
             Учётная запись с именем <code className="rounded bg-slate-100 px-1">admin</code> из
             первого запуска. Супер-админ может задать новый пароль без старого; сам пользователь
@@ -644,12 +788,27 @@ export default function Settings() {
             {bootstrapSaving && <Loader2 className="h-4 w-4 shrink-0 animate-spin" />}
             Сохранить пароль
           </button>
-        </div>
+        </CollapsibleSection>
       )}
 
-      <div className="card max-w-2xl space-y-3" title="Проверка без сохранения: используется первый ключ провайдера в базе">
-        <h2 className="font-medium">Провайдеры ИИ</h2>
-        <ul className="divide-y divide-slate-100 rounded border border-slate-200">
+      <CollapsibleSection
+        id="settings-ai-providers"
+        title="Провайдеры ИИ"
+        open={sectionOpen.aiProv}
+        onToggle={() => setSectionOpen((o) => ({ ...o, aiProv: !o.aiProv }))}
+        statusIcon={
+          s ? (
+            <StatusCheck
+              ok={s.has_ai}
+              label="ИИ: в базе есть настроенные ключи"
+            />
+          ) : null
+        }
+      >
+        <ul
+          className="divide-y divide-slate-100 rounded border border-slate-200"
+          title="Проверка без сохранения: используется первый ключ провайдера в базе"
+        >
           {providerCatalogue.map((p) => (
             <li key={p.id} className="flex items-center justify-between gap-2 px-3 py-2">
               <span className="text-sm text-slate-800">{p.label}</span>
@@ -709,13 +868,14 @@ export default function Settings() {
         <p className="text-xs text-slate-500">
           Пустое поле — без прокси. Сохраняется кнопкой «Сохранить настройки ИИ» ниже.
         </p>
-      </div>
+      </CollapsibleSection>
 
-      <div
-        className="card max-w-2xl space-y-2"
-        title="Список ключей: полный набор на момент сохранения, можно удалить слот кнопкой"
+      <CollapsibleSection
+        id="settings-ai-keys"
+        title="Сохранённые API-ключи"
+        open={sectionOpen.aiKeys}
+        onToggle={() => setSectionOpen((o) => ({ ...o, aiKeys: !o.aiKeys }))}
       >
-        <h2 className="font-medium">Сохранённые API-ключи</h2>
         {keys.length === 0 && (
           <p className="text-sm text-slate-500">Слотов нет. Добавьте хотя бы один или сохраните
             пустой список, чтобы убрать все ключи ИИ.
@@ -724,11 +884,12 @@ export default function Settings() {
         {keys.map((k) => (
           <div
             key={k.id}
-            className="grid gap-1 rounded border border-slate-200 p-2 sm:grid-cols-[1fr_1fr_1fr_auto] sm:items-end"
+            className="flex min-w-0 flex-col gap-2 rounded border border-slate-200 p-3 lg:flex-row lg:items-end lg:gap-3"
           >
+            <div className="grid min-w-0 w-full flex-1 grid-cols-1 gap-2 sm:grid-cols-3">
             <input
               placeholder="openai|gemini|deepseek|yandexgpt"
-              className="rounded border border-slate-200 px-2"
+              className="min-w-0 w-full rounded border border-slate-200 px-2 py-2"
               value={k.provider}
               onChange={(e) => {
                 const v = e.target.value;
@@ -746,7 +907,7 @@ export default function Settings() {
             />
             <input
               placeholder="имя слота"
-              className="rounded border border-slate-200 px-2"
+              className="min-w-0 w-full rounded border border-slate-200 px-2 py-2"
               value={k.name}
               onChange={(e) => {
                 const v = e.target.value;
@@ -763,7 +924,7 @@ export default function Settings() {
             />
             <input
               placeholder="новый ключ (пусто = не менять)"
-              className="rounded border border-slate-200 px-2"
+              className="min-w-0 w-full rounded border border-slate-200 px-2 py-2"
               value={k.key}
               onChange={(e) => {
                 const v = e.target.value;
@@ -779,9 +940,10 @@ export default function Settings() {
               }}
               type="password"
             />
+            </div>
             <button
               type="button"
-              className="btn-ghost justify-self-end text-sm text-red-700"
+              className="btn-ghost h-10 shrink-0 whitespace-nowrap px-3 text-sm text-red-700 max-sm:w-full sm:max-lg:self-end"
               onClick={() => setKeys((rows) => rows.filter((r) => r.id !== k.id))}
             >
               Удалить
@@ -829,6 +991,8 @@ export default function Settings() {
           >
             Сохранить настройки ИИ
           </button>
+        </div>
+      </CollapsibleSection>
         </div>
       </div>
     </div>
