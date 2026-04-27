@@ -62,12 +62,6 @@ def _issue_to_out(issue: RedmineIssue, complexity_field_id: int | None) -> Issue
     )
 
 
-async def _get_keys(session: AsyncSession) -> list[ai_client.APIKeyEntry]:
-    """Return decrypted AI key list or empty if none."""
-    c = await get_or_create_settings(session)
-    return ai_client.parse_ai_keys_json(c.ai_keys_json or [])
-
-
 def _split_prompt_redmine_block(issue: RedmineIssue) -> str:
     """
     Text block for the LLM: existing subtasks and relations (avoid duplicate split proposals).
@@ -191,12 +185,14 @@ async def suggest_split(
     """
     Propose 2-4 subtasks with AI (or return empty and allow manual in UI if no keys).
     """
-    keys = await _get_keys(session)
     rmc = await make_redmine_client_for_user(session, user)
     try:
         issue = await rmc.get_issue(issue_id)
     finally:
         await rmc.aclose()
+    c = await get_or_create_settings(session)
+    keys = ai_client.parse_ai_keys_json(c.ai_keys_json or [])
+    socks = ai_client.parse_socks5_proxies(c.ai_socks5_proxies_json)
     if not keys:
         return []
     if user.redmine_user_id and int(issue.assignee_id or 0) != int(user.redmine_user_id):
@@ -218,6 +214,7 @@ async def suggest_split(
                 keys,
                 prompts=user.ai_prompts_json,
                 redmine_context=rctx,
+                socks5_proxies=socks,
             )
         ]
     except Exception as e:  # noqa: BLE001
@@ -281,7 +278,9 @@ async def suggest_complexity(
     """
     Suggest t-shirt size using AI. Returns { "value": "m" }.
     """
-    keys = await _get_keys(session)
+    c = await get_or_create_settings(session)
+    keys = ai_client.parse_ai_keys_json(c.ai_keys_json or [])
+    socks = ai_client.parse_socks5_proxies(c.ai_socks5_proxies_json)
     if not keys:
         raise HTTPException(status_code=400, detail="No AI keys configured")
     rmc = await make_redmine_client_for_user(session, user)
@@ -291,7 +290,11 @@ async def suggest_complexity(
         await rmc.aclose()
     try:
         v = ai_client.suggest_complexity(
-            issue.subject, issue.description or "", keys, prompts=user.ai_prompts_json
+            issue.subject,
+            issue.description or "",
+            keys,
+            prompts=user.ai_prompts_json,
+            socks5_proxies=socks,
         )
         return {"value": v if v in COMPLEXITY_VALUES else "m"}
     except Exception as e:  # noqa: BLE001

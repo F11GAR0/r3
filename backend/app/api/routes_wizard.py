@@ -119,6 +119,7 @@ async def wizard_hint(
         issue.spent_hours,
         keys,
         prompts=user.ai_prompts_json,
+        socks5_proxies=ai_client.parse_socks5_proxies(st.ai_socks5_proxies_json),
     )
 
 

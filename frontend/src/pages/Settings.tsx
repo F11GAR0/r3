@@ -19,6 +19,7 @@ type Sett = {
   ldap_user_filter: string | null;
   has_ldap_bind_password: boolean;
   ldap_effective: boolean;
+  ai_socks5_proxies: string[];
 };
 
 type RoleRow = { id: string; label: string; description: string };
@@ -76,6 +77,7 @@ export default function Settings() {
   const [bootstrapMsg, setBootstrapMsg] = useState("");
   const [bootstrapErr, setBootstrapErr] = useState("");
   const [bootstrapSaving, setBootstrapSaving] = useState(false);
+  const [socks5Text, setSocks5Text] = useState("");
 
   const canBootstrapPassword =
     isAdmin(user) && (isSuperAdmin(user) || user?.username === "admin");
@@ -99,6 +101,7 @@ export default function Settings() {
     setLdapUserBase(j.ldap_user_base_dn ?? "");
     setLdapFilter(j.ldap_user_filter || "(uid={username})");
     setLdapBindPassword("");
+    setSocks5Text((j.ai_socks5_proxies ?? []).join("\n"));
   }, []);
 
   useEffect(() => {
@@ -631,6 +634,22 @@ export default function Settings() {
             </li>
           ))}
         </ul>
+        <label className="block text-sm text-slate-600">
+          SOCKS5 для исходящих запросов к API ИИ (по одному на строку, round-robin). Пример:{" "}
+          <code className="rounded bg-slate-100 px-1">socks5://127.0.0.1:1080</code> или{" "}
+          <code className="rounded bg-slate-100 px-1">host:port</code>
+        </label>
+        <textarea
+          className="min-h-[5rem] w-full rounded border border-slate-300 px-3 py-2 font-mono text-sm"
+          value={socks5Text}
+          onChange={(e) => setSocks5Text(e.target.value)}
+          placeholder={"socks5://127.0.0.1:1080\nsocks5://proxy.example.net:1080"}
+          spellCheck={false}
+          autoComplete="off"
+        />
+        <p className="text-xs text-slate-500">
+          Пустое поле — без прокси. Сохраняется вместе с кнопкой «Сохранить» в блоке ключей ниже.
+        </p>
       </div>
 
       <div
@@ -699,12 +718,17 @@ export default function Settings() {
             className="btn-primary"
             onClick={async () => {
               setMsg("");
+              const socksLines = socks5Text
+                .split("\n")
+                .map((l) => l.trim())
+                .filter(Boolean);
               const body: Record<string, unknown> = {
                 redmine_base_url: url || null,
                 redmine_insecure_ssl: insecure,
                 sprint_lifecycle_days: sprint,
                 project_id: proj ? parseInt(proj, 10) : null,
                 ai_keys: keys.map((k) => ({ provider: k.provider, name: k.name, key: k.key })),
+                ai_socks5_proxies: socksLines,
               };
               if (apiKey.trim()) {
                 body.redmine_api_key = apiKey.trim();

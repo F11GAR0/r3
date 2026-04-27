@@ -84,6 +84,8 @@ class AppSettingsIn(BaseModel):
     )
     ldap_user_base_dn: str | None = None
     ldap_user_filter: str | None = None
+    # Outbound SOCKS5 for AI API (OpenAI, Gemini, DeepSeek); round-robin if several.
+    ai_socks5_proxies: list[str] | None = None
 
 
 class AIKeyEntryOut(BaseModel):
@@ -112,3 +114,5 @@ class AppSettingsOut(BaseModel):
     ldap_user_filter: str | None = None
     has_ldap_bind_password: bool = False
     ldap_effective: bool = False
+    # e.g. socks5://user:pass@host:port or host:port (one per line in UI)
+    ai_socks5_proxies: list[str] = Field(default_factory=list)

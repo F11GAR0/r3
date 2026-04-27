@@ -63,6 +63,12 @@ async def apply_app_settings_patches(conn: AsyncConnection) -> None:
                 "ldap_user_filter VARCHAR(512) NULL"
             )
         )
+        await conn.execute(
+            text(
+                "ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS "
+                "ai_socks5_proxies_json JSONB NULL"
+            )
+        )
         return
     if d == "sqlite":
         r = (await conn.execute(text("PRAGMA table_info(app_settings)"))).fetchall()
@@ -113,6 +119,12 @@ async def apply_app_settings_patches(conn: AsyncConnection) -> None:
                 await conn.execute(text(sql))
             r4 = (await conn.execute(text("PRAGMA table_info(app_settings)"))).fetchall()
             cols4 = {str(row[1]) for row in r4}
+        r5 = (await conn.execute(text("PRAGMA table_info(app_settings)"))).fetchall()
+        cols5 = {str(row[1]) for row in r5}
+        if "ai_socks5_proxies_json" not in cols5:
+            await conn.execute(
+                text("ALTER TABLE app_settings ADD COLUMN ai_socks5_proxies_json TEXT NULL")
+            )
         return
 
 

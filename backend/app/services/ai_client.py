@@ -7,9 +7,10 @@ import logging
 import re
 import threading
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any
+from typing import Any, Iterator
 
 import httpx
 
@@ -95,6 +96,7 @@ class APIKeyEntry:
 # Thread-safe index for round-robin across keys of same provider
 _rr_lock = threading.Lock()
 _rr_index: dict[str, int] = {}
+_SOCKS_RR_KEY = "ai_socks5"
 
 
 def _next_index(key: str, n: int) -> int:
@@ -103,6 +105,67 @@ def _next_index(key: str, n: int) -> int:
         i = _rr_index.get(key, 0) % n if n else 0
         _rr_index[key] = i + 1
     return i
+
+
+def _normalize_socks5_url(line: str) -> str:
+    """Accept ``socks5://host:port`` or ``host:port`` (prepend scheme)."""
+    s = line.strip()
+    if not s:
+        return ""
+    low = s.lower()
+    if low.startswith("socks5://") or low.startswith("socks5h://"):
+        return s
+    if "://" in s:
+        return s
+    return f"socks5://{s}"
+
+
+def parse_socks5_proxies(raw: Any) -> list[str]:
+    """
+    Parse stored JSON list or newline-separated text into SOCKS5 proxy URLs.
+
+    Args:
+        raw: List of strings from ``app_settings.ai_socks5_proxies_json``, or None.
+
+    Returns:
+        Non-empty normalized URLs, round-robin order preserved.
+    """
+    if not raw:
+        return []
+    lines: list[str]
+    if isinstance(raw, list):
+        lines = [str(x).strip() for x in raw if str(x).strip()]
+    elif isinstance(raw, str):
+        lines = [x.strip() for x in raw.splitlines() if x.strip()]
+    else:
+        return []
+    out: list[str] = []
+    for line in lines:
+        u = _normalize_socks5_url(line)
+        if u:
+            out.append(u)
+    return out
+
+
+def _pick_socks_proxy_url(urls: list[str]) -> str | None:
+    """Round-robin pick among configured SOCKS5 proxies."""
+    if not urls:
+        return None
+    i = _next_index(_SOCKS_RR_KEY, len(urls))
+    return urls[i]
+
+
+@contextmanager
+def _ai_http_client(proxy_url: str | None) -> Iterator[httpx.Client]:
+    """
+    Sync httpx client for outbound AI calls. Optional SOCKS5 ``proxy_url`` (round-robin
+    chosen by caller).
+    """
+    kw: dict[str, Any] = {"timeout": 120.0, "trust_env": False}
+    if proxy_url:
+        kw["proxy"] = proxy_url
+    with httpx.Client(**kw) as client:
+        yield client
 
 
 def parse_ai_keys_json(raw: Any) -> list[APIKeyEntry]:
@@ -155,7 +218,12 @@ def _pick_key(entries: list[APIKeyEntry], provider: AIProvider | None = None) ->
 
 
 def _openai_complete_one(
-    base_url: str, api_key: str, model: str, system: str, user: str
+    client: httpx.Client,
+    base_url: str,
+    api_key: str,
+    model: str,
+    system: str,
+    user: str,
 ) -> httpx.Response:
     body = {
         "model": model,
@@ -164,7 +232,7 @@ def _openai_complete_one(
             {"role": "user", "content": user},
         ],
     }
-    return httpx.post(
+    return client.post(
         f"{base_url.rstrip('/')}/v1/chat/completions",
         headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
         json=body,
@@ -173,7 +241,12 @@ def _openai_complete_one(
 
 
 def _openai_complete(
-    base_url: str, api_key: str, system: str, user: str, models: tuple[str, ...]
+    client: httpx.Client,
+    base_url: str,
+    api_key: str,
+    system: str,
+    user: str,
+    models: tuple[str, ...],
 ) -> str:
     """
     OpenAI-compatible /chat/completions: try each model in ``models`` on failure.
@@ -182,7 +255,7 @@ def _openai_complete(
     """
     last: httpx.Response | None = None
     for idx, m in enumerate(models):
-        r = _openai_complete_one(base_url, api_key, m, system, user)
+        r = _openai_complete_one(client, base_url, api_key, m, system, user)
         if r.is_success:
             return str(r.json()["choices"][0]["message"]["content"])
         code = r.status_code
@@ -252,13 +325,13 @@ def _http_error_message(response: httpx.Response) -> str:
 
 
 def _generative_post_with_retries(
-    api_key: str, model: str, body: dict[str, Any]
+    client: httpx.Client, api_key: str, model: str, body: dict[str, Any]
 ) -> httpx.Response:
     """POST generateContent; one retry on 429/5xx."""
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
     last_response: httpx.Response | None = None
     for attempt in range(2):
-        r = httpx.post(
+        r = client.post(
             url,
             params={"key": api_key},
             json=body,
@@ -309,7 +382,9 @@ def _http_status_worth_model_fallback(r: httpx.Response) -> bool:
     return r.status_code in (404, 429, 500, 502, 503, 504)
 
 
-def _gemini_complete(api_key: str, model: str, system: str, user: str) -> str:
+def _gemini_complete(
+    client: httpx.Client, api_key: str, model: str, system: str, user: str
+) -> str:
     """
     Call Google Generative Language API (generateContent) for Gemma / Gemini family.
 
@@ -329,7 +404,7 @@ def _gemini_complete(api_key: str, model: str, system: str, user: str) -> str:
     body = _gemma_generate_content_body(system, user, max_output_tokens=8192)
     order = GOOGLE_GENERATIVE_MODEL_CHAIN
     for idx, m in enumerate(order):
-        r = _generative_post_with_retries(api_key, m, body)
+        r = _generative_post_with_retries(client, api_key, m, body)
         try:
             return _parse_generative_content_response(r)
         except ValueError:
@@ -351,6 +426,7 @@ def suggest_task_split(
     *,
     prompts: Any = None,
     redmine_context: str = "",
+    socks5_proxies: list[str] | None = None,
 ) -> list[dict[str, str]]:
     """
     Ask an LLM to propose 2–4 child tasks (subject + description only).
@@ -362,6 +438,7 @@ def suggest_task_split(
         prompts: Optional ``users.ai_prompts_json`` (merged with defaults inside).
         redmine_context: Subtasks and related issues (plain text) so the model avoids duplicating
             work already captured in Redmine.
+        socks5_proxies: Optional round-robin SOCKS5 URLs for outbound AI traffic.
 
     Returns:
         List of { "subject", "description" }.
@@ -372,7 +449,10 @@ def suggest_task_split(
     user = f"Parent title: {title}\n\nDescription:\n{issue_text or ''}\n"
     if str(redmine_context).strip():
         user += f"\n{str(redmine_context).strip()}\n"
-    raw = _call_provider(e, system, user)
+    urls = parse_socks5_proxies(socks5_proxies)
+    proxy = _pick_socks_proxy_url(urls) if urls else None
+    with _ai_http_client(proxy) as client:
+        raw = _call_provider(e, system, user, client)
     return _parse_json_array(raw)
 
 
@@ -384,6 +464,7 @@ def suggest_wizard_actions(
     keys: list[APIKeyEntry],
     *,
     prompts: Any = None,
+    socks5_proxies: list[str] | None = None,
 ) -> dict[str, Any]:
     """
     Ask the model for one-line suggestions: close, split, log time, change status, comment.
@@ -395,7 +476,10 @@ def suggest_wizard_actions(
     e = _pick_key(keys)
     system = p["wizard_system"]
     user = f"Task: {issue_title}\nStatus: {status}\nSpent: {spent_hours}h\n\n{issue_text}"
-    raw = _call_provider(e, system, user)
+    urls = parse_socks5_proxies(socks5_proxies)
+    proxy = _pick_socks_proxy_url(urls) if urls else None
+    with _ai_http_client(proxy) as client:
+        raw = _call_provider(e, system, user, client)
     try:
         m = re.search(r"\{[\s\S]*\}", raw)
         if not m:
@@ -406,7 +490,12 @@ def suggest_wizard_actions(
 
 
 def suggest_complexity(
-    issue_title: str, issue_text: str, keys: list[APIKeyEntry], *, prompts: Any = None
+    issue_title: str,
+    issue_text: str,
+    keys: list[APIKeyEntry],
+    *,
+    prompts: Any = None,
+    socks5_proxies: list[str] | None = None,
 ) -> str:
     """
     Return one of s,m,l,xl,2xl as suggested t-shirt size.
@@ -424,7 +513,10 @@ def suggest_complexity(
     e = _pick_key(keys)
     system = p["complexity_system"]
     user = f"{issue_title}\n\n{issue_text or ''}"
-    raw = _call_provider(e, system, user).strip().lower()
+    urls = parse_socks5_proxies(socks5_proxies)
+    proxy = _pick_socks_proxy_url(urls) if urls else None
+    with _ai_http_client(proxy) as client:
+        raw = _call_provider(e, system, user, client).strip().lower()
     if "2xl" in raw:
         return "2xl"
     for token in ("xl", "l", "m", "s"):
@@ -433,7 +525,11 @@ def suggest_complexity(
     return "m"
 
 
-def test_provider_reachability(provider: AIProvider, api_key: str) -> tuple[bool, str]:
+def test_provider_reachability(
+    provider: AIProvider,
+    api_key: str,
+    socks5_proxies: list[str] | None = None,
+) -> tuple[bool, str]:
     """
     One minimal call per provider to verify that the key works (no full completion cost).
 
@@ -444,54 +540,59 @@ def test_provider_reachability(provider: AIProvider, api_key: str) -> tuple[bool
     Returns:
         (True, \"\") on success, or (False, short error text).
     """
+    urls = parse_socks5_proxies(socks5_proxies)
+    proxy = _pick_socks_proxy_url(urls) if urls else None
     try:
-        if provider == AIProvider.OPENAI:
-            r = _openai_complete_one(
-                "https://api.openai.com",
-                api_key,
-                OPENAI_MODEL_CHAIN[0],
-                "You are a test.",
-                ".",
-            )
-            r.raise_for_status()
-            return True, ""
-        if provider == AIProvider.DEEPSEEK:
-            r = _openai_complete_one(
-                "https://api.deepseek.com",
-                api_key,
-                DEEPSEEK_MODEL_CHAIN[0],
-                "You are a test.",
-                ".",
-            )
-            r.raise_for_status()
-            return True, ""
-        if provider == AIProvider.GEMINI:
-            probe = _gemma_generate_content_body("You are a test.", ".", max_output_tokens=8)
-            for m in GOOGLE_GENERATIVE_MODEL_CHAIN[:3]:
-                gurl = f"https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent"
-                r = httpx.post(
-                    gurl,
-                    params={"key": api_key},
-                    json=probe,
-                    timeout=25.0,
+        with _ai_http_client(proxy) as client:
+            if provider == AIProvider.OPENAI:
+                r = _openai_complete_one(
+                    client,
+                    "https://api.openai.com",
+                    api_key,
+                    OPENAI_MODEL_CHAIN[0],
+                    "You are a test.",
+                    ".",
                 )
-                if m == GOOGLE_GEMMA_MODEL and r.status_code in (500, 502, 503, 504, 429):
-                    continue
-                if not r.is_success:
-                    r.raise_for_status()
-                j = r.json()
-                if j.get("error"):
-                    e = j["error"]
-                    err_msg = e.get("message", str(e)) if isinstance(e, dict) else str(e)
-                    if m == GOOGLE_GEMMA_MODEL and "Internal" in (err_msg or ""):
-                        continue
-                    return False, err_msg[:400]
-                if not (j.get("candidates") or []):
-                    if m == GOOGLE_GEMMA_MODEL:
-                        continue
-                    return False, "No candidates (check key / model access in AI Studio)"
+                r.raise_for_status()
                 return True, ""
-            return False, "Gemma and Flash fallback both failed (check status page / key)"
+            if provider == AIProvider.DEEPSEEK:
+                r = _openai_complete_one(
+                    client,
+                    "https://api.deepseek.com",
+                    api_key,
+                    DEEPSEEK_MODEL_CHAIN[0],
+                    "You are a test.",
+                    ".",
+                )
+                r.raise_for_status()
+                return True, ""
+            if provider == AIProvider.GEMINI:
+                probe = _gemma_generate_content_body("You are a test.", ".", max_output_tokens=8)
+                for m in GOOGLE_GENERATIVE_MODEL_CHAIN[:3]:
+                    gurl = f"https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent"
+                    r = client.post(
+                        gurl,
+                        params={"key": api_key},
+                        json=probe,
+                        timeout=25.0,
+                    )
+                    if m == GOOGLE_GEMMA_MODEL and r.status_code in (500, 502, 503, 504, 429):
+                        continue
+                    if not r.is_success:
+                        r.raise_for_status()
+                    j = r.json()
+                    if j.get("error"):
+                        e = j["error"]
+                        err_msg = e.get("message", str(e)) if isinstance(e, dict) else str(e)
+                        if m == GOOGLE_GEMMA_MODEL and "Internal" in (err_msg or ""):
+                            continue
+                        return False, err_msg[:400]
+                    if not (j.get("candidates") or []):
+                        if m == GOOGLE_GEMMA_MODEL:
+                            continue
+                        return False, "No candidates (check key / model access in AI Studio)"
+                    return True, ""
+                return False, "Gemma and Flash fallback both failed (check status page / key)"
     except httpx.HTTPStatusError as e:
         body = (e.response.text or "")[:400]
         return False, f"HTTP {e.response.status_code}: {body}"
@@ -500,7 +601,7 @@ def test_provider_reachability(provider: AIProvider, api_key: str) -> tuple[bool
     return False, "unknown provider"
 
 
-def _call_provider(e: APIKeyEntry, system: str, user: str) -> str:
+def _call_provider(e: APIKeyEntry, system: str, user: str, client: httpx.Client) -> str:
     """
     Route to the correct provider implementation.
 
@@ -508,21 +609,39 @@ def _call_provider(e: APIKeyEntry, system: str, user: str) -> str:
         e: Key entry to bill against.
         system: System prompt.
         user: User content.
+        client: HTTP client (SOCKS5 if configured in outer ``_ai_http_client``).
 
     Returns:
         Model text.
     """
     if e.provider == AIProvider.OPENAI:
         return _openai_complete(
-            "https://api.openai.com", e.secret, system, user, OPENAI_MODEL_CHAIN
+            client,
+            "https://api.openai.com",
+            e.secret,
+            system,
+            user,
+            OPENAI_MODEL_CHAIN,
         )
     if e.provider == AIProvider.DEEPSEEK:
         return _openai_complete(
-            "https://api.deepseek.com", e.secret, system, user, DEEPSEEK_MODEL_CHAIN
+            client,
+            "https://api.deepseek.com",
+            e.secret,
+            system,
+            user,
+            DEEPSEEK_MODEL_CHAIN,
         )
     if e.provider == AIProvider.GEMINI:
-        return _gemini_complete(e.secret, GOOGLE_GEMMA_MODEL, system, user)
-    return _openai_complete("https://api.openai.com", e.secret, system, user, OPENAI_MODEL_CHAIN)
+        return _gemini_complete(client, e.secret, GOOGLE_GEMMA_MODEL, system, user)
+    return _openai_complete(
+        client,
+        "https://api.openai.com",
+        e.secret,
+        system,
+        user,
+        OPENAI_MODEL_CHAIN,
+    )
 
 
 def _parse_json_array(text: str) -> list[dict[str, str]]:

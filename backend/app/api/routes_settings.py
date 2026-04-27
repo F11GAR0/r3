@@ -89,7 +89,8 @@ async def test_ai_provider(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"No saved key for provider {prov.value}",
         )
-    ok, err = ai_client.test_provider_reachability(prov, key_str)
+    socks = ai_client.parse_socks5_proxies(s.ai_socks5_proxies_json) or None
+    ok, err = ai_client.test_provider_reachability(prov, key_str, socks5_proxies=socks)
     if ok:
         return {"ok": True, "message": "Доступность подтверждена."}
     return {"ok": False, "message": err}
@@ -230,6 +231,13 @@ async def put_settings(
         s.ldap_user_filter = (str(v).strip() if v else None) or None
     if "ldap_bind_password" in d and (d.get("ldap_bind_password") or "").strip():
         s.ldap_bind_password_encrypted = encrypt_secret(str(d["ldap_bind_password"]).strip())
+    if "ai_socks5_proxies" in d:
+        v = d["ai_socks5_proxies"]
+        if v is None:
+            s.ai_socks5_proxies_json = None
+        else:
+            cleaned = [str(x).strip() for x in v if str(x).strip()]
+            s.ai_socks5_proxies_json = cleaned
     return await _build_out(session, s)
 
 
@@ -344,6 +352,9 @@ async def _build_out(session: AsyncSession, s: AppSettings) -> AppSettingsOut:
                     )
                 )
     ldap_effective = await resolve_ldap_config(session) is not None
+    socks_list: list[str] = []
+    if s.ai_socks5_proxies_json and isinstance(s.ai_socks5_proxies_json, list):
+        socks_list = [str(x) for x in s.ai_socks5_proxies_json]
     return AppSettingsOut(
         redmine_base_url=s.redmine_base_url,
         redmine_insecure_ssl=bool(s.redmine_insecure_ssl),
@@ -360,4 +371,5 @@ async def _build_out(session: AsyncSession, s: AppSettings) -> AppSettingsOut:
         ldap_user_filter=s.ldap_user_filter,
         has_ldap_bind_password=bool(s.ldap_bind_password_encrypted),
         ldap_effective=ldap_effective,
+        ai_socks5_proxies=socks_list,
     )
